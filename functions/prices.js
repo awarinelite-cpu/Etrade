@@ -9,6 +9,14 @@ const SYMBOL_TO_ID = {
   BNB: "binancecoin",
   XRP: "ripple",
   DOGE: "dogecoin",
+  ADA: "cardano",
+  MATIC: "matic-network",
+  DOT: "polkadot",
+  LINK: "chainlink",
+  LTC: "litecoin",
+  AVAX: "avalanche-2",
+  TRX: "tron",
+  SHIB: "shiba-inu",
 };
 
 /**

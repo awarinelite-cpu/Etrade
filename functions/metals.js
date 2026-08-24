@@ -6,6 +6,7 @@ const fetch = require("node-fetch");
 const METAL_SYMBOL_TO_ID = {
   GOLD: "XAU",
   SILVER: "XAG",
+  PALLADIUM: "XPD",
 };
 
 const METALS_API_BASE = "https://api.gold-api.com";
