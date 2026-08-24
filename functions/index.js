@@ -143,8 +143,9 @@ async function handleHelp(chatId) {
   await sendMessage(
     chatId,
     "*Commands*\n\n" +
-      "`/alert <COIN> <above|below> <price> [BUY|SELL]` — create a price alert\n" +
-      "  the BUY/SELL label is optional and just tags the alert for your own reference\n" +
+      "`/alert <COIN> <above|below> <price> [BUY|SELL] [REPEAT]` — create a price alert\n" +
+      "  BUY/SELL is optional and just tags the alert for your own reference\n" +
+      "  REPEAT keeps the alert active — it fires again each time price re-crosses your target\n" +
       "`/price <COIN>` — check the current price before setting an alert\n" +
       "`/myalerts` — list your active alerts\n" +
       "`/myid` — get your dashboard ID (to view alerts on the web)\n" +
@@ -192,32 +193,45 @@ async function handlePrice(chatId, args) {
 }
 
 async function handleCreateAlert(chatId, args) {
-  if (args.length < 3 || args.length > 4) {
+  if (args.length < 3 || args.length > 5) {
     await sendMessage(
       chatId,
-      "Usage: `/alert <COIN> <above|below> <price> [BUY|SELL]`\n" +
+      "Usage: `/alert <COIN> <above|below> <price> [BUY|SELL] [REPEAT]`\n" +
         "Example: `/alert BTC above 70000`\n" +
-        "Example with label: `/alert BTC below 60000 BUY`"
+        "Example with label: `/alert BTC below 60000 BUY`\n" +
+        "Example repeating: `/alert BTC above 70000 REPEAT`\n\n" +
+        "REPEAT alerts fire every time the price crosses your target, " +
+        "instead of just once."
     );
     return;
   }
 
-  const [coinRaw, conditionRaw, priceRaw, labelRaw] = args;
+  const [coinRaw, conditionRaw, priceRaw, ...rest] = args;
   const coin = coinRaw.toUpperCase();
   const condition = conditionRaw.toLowerCase();
   const targetPrice = parseFloat(priceRaw);
 
+  // The remaining args (up to 2) can be BUY/SELL and/or REPEAT, in any order.
   let label = null;
-  if (labelRaw !== undefined) {
-    const normalizedLabel = labelRaw.toUpperCase();
-    if (!["BUY", "SELL"].includes(normalizedLabel)) {
+  let repeat = false;
+  for (const token of rest) {
+    const normalized = token.toUpperCase();
+    if (["BUY", "SELL"].includes(normalized)) {
+      if (label !== null) {
+        await sendMessage(chatId, "You can only specify one of `BUY` or `SELL`.");
+        return;
+      }
+      label = normalized;
+    } else if (normalized === "REPEAT") {
+      repeat = true;
+    } else {
       await sendMessage(
         chatId,
-        "The optional label must be either `BUY` or `SELL`."
+        `I didn't understand \`${token}\`. Optional flags are ` +
+          "`BUY`, `SELL`, and `REPEAT`."
       );
       return;
     }
-    label = normalizedLabel;
   }
 
   if (!isSupportedAsset(coin)) {
@@ -263,12 +277,18 @@ async function handleCreateAlert(chatId, args) {
     condition,
     targetPrice,
     label,
+    repeat,
+    // "armed" tracks whether this alert is ready to fire next time the
+    // condition is met. Only meaningful for repeating alerts — one-shot
+    // alerts just deactivate on trigger instead of re-arming.
+    armed: true,
     active: true,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     lastTriggeredAt: null,
   });
 
   const labelPrefix = labelTag(label);
+  const repeatSuffix = repeat ? " 🔁 (repeating)" : "";
 
   // Best-effort: show the current price alongside the confirmation.
   // If the price fetch fails, don't block the alert confirmation on it.
@@ -285,7 +305,7 @@ async function handleCreateAlert(chatId, args) {
 
   await sendMessage(
     chatId,
-    `✅ ${labelPrefix}Alert set: *${coin}* ${condition} *$${targetPrice.toLocaleString()}*\n` +
+    `✅ ${labelPrefix}Alert set: *${coin}* ${condition} *$${targetPrice.toLocaleString()}*${repeatSuffix}\n` +
       `ID: \`${docRef.id.slice(0, 6)}\`${currentPriceLine}`
   );
 }
@@ -319,7 +339,8 @@ async function handleListAlerts(chatId) {
     const d = doc.data();
     const tag = labelTag(d.label).trim();
     const tagPrefix = tag ? `${tag} ` : "";
-    return `\`${doc.id.slice(0, 6)}\` — ${tagPrefix}${d.coin} ${d.condition} $${d.targetPrice.toLocaleString()}`;
+    const repeatSuffix = d.repeat ? " 🔁" : "";
+    return `\`${doc.id.slice(0, 6)}\` — ${tagPrefix}${d.coin} ${d.condition} $${d.targetPrice.toLocaleString()}${repeatSuffix}`;
   });
 
   await sendMessage(chatId, "*Your active alerts:*\n\n" + lines.join("\n"));
@@ -390,14 +411,30 @@ exports.checkPrices = onSchedule(
       const currentPrice = prices[alert.coin];
       if (currentPrice === undefined) continue;
 
-      const shouldTrigger =
+      const conditionMet =
         (alert.condition === "above" && currentPrice >= alert.targetPrice) ||
         (alert.condition === "below" && currentPrice <= alert.targetPrice);
 
-      if (shouldTrigger) {
+      if (!alert.repeat) {
+        // One-shot alert: fire once, then deactivate.
+        if (conditionMet) {
+          triggeredUpdates.push(
+            notifyAndDeactivate(doc.ref, alert, currentPrice)
+          );
+        }
+        continue;
+      }
+
+      // Repeating alert: only fire while "armed" (i.e. hasn't already
+      // notified for this crossing), then re-arm once price moves back
+      // to the other side of the target so the next crossing can fire too.
+      const armed = alert.armed !== false; // default true for older docs
+      if (armed && conditionMet) {
         triggeredUpdates.push(
-          notifyAndDeactivate(doc.ref, alert, currentPrice)
+          notifyAndReArmLater(doc.ref, alert, currentPrice)
         );
+      } else if (!armed && !conditionMet) {
+        triggeredUpdates.push(doc.ref.update({ armed: true }));
       }
     }
 
@@ -425,13 +462,40 @@ async function notifyAndDeactivate(docRef, alert, currentPrice) {
     triggeredAtPrice: currentPrice,
   });
 
-  // Log to history for future reference / analytics
+  await logAlertHistory(alert, currentPrice);
+}
+
+async function notifyAndReArmLater(docRef, alert, currentPrice) {
+  const labelPrefix = labelTag(alert.label);
+
+  await sendMessage(
+    alert.chatId,
+    `🚨 *${labelPrefix}${alert.coin} Alert!* 🔁\n\n` +
+      `${alert.coin} is now $${currentPrice.toLocaleString()}, which is ${alert.condition} ` +
+      `your target of $${alert.targetPrice.toLocaleString()}.\n\n` +
+      "This is a repeating alert — it'll fire again next time price crosses " +
+      "your target. Delete it anytime with `/delete`."
+  );
+
+  // Mark disarmed so it doesn't re-fire every 5 minutes while price stays
+  // past the target. It re-arms automatically once price crosses back.
+  await docRef.update({
+    armed: false,
+    lastTriggeredAt: admin.firestore.FieldValue.serverTimestamp(),
+    triggeredAtPrice: currentPrice,
+  });
+
+  await logAlertHistory(alert, currentPrice);
+}
+
+async function logAlertHistory(alert, currentPrice) {
   await db.collection("alert_history").add({
     chatId: alert.chatId,
     coin: alert.coin,
     condition: alert.condition,
     targetPrice: alert.targetPrice,
     label: alert.label || null,
+    repeat: Boolean(alert.repeat),
     triggeredAtPrice: currentPrice,
     triggeredAt: admin.firestore.FieldValue.serverTimestamp(),
   });
