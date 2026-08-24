@@ -5,6 +5,41 @@ const admin = require("firebase-admin");
 
 const { sendMessage } = require("./telegram");
 const { getPrices, isSupportedSymbol, SYMBOL_TO_ID } = require("./prices");
+const {
+  getMetalPrices,
+  isSupportedMetal,
+  METAL_SYMBOL_TO_ID,
+} = require("./metals");
+
+// Combined list of every symbol the bot supports, across both asset types,
+// for help text and error messages.
+const ALL_SUPPORTED_SYMBOLS = [
+  ...Object.keys(SYMBOL_TO_ID),
+  ...Object.keys(METAL_SYMBOL_TO_ID),
+];
+
+/** True if the symbol is a supported coin OR a supported metal. */
+function isSupportedAsset(symbol) {
+  return isSupportedSymbol(symbol) || isSupportedMetal(symbol);
+}
+
+/**
+ * Fetch current USD prices for a mixed list of symbols, routing each to
+ * the right source (CoinGecko for coins, gold-api.com for metals).
+ * @param {string[]} symbols
+ * @returns {Promise<Object>} map of symbol -> price in USD
+ */
+async function getAssetPrices(symbols) {
+  const coinSymbols = symbols.filter((s) => isSupportedSymbol(s));
+  const metalSymbols = symbols.filter((s) => isSupportedMetal(s));
+
+  const [coinPrices, metalPrices] = await Promise.all([
+    coinSymbols.length ? getPrices(coinSymbols) : {},
+    metalSymbols.length ? getMetalPrices(metalSymbols) : {},
+  ]);
+
+  return { ...coinPrices, ...metalPrices };
+}
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -87,9 +122,11 @@ async function handleStart(chatId) {
     "*Welcome to the Crypto Alert Bot!* 🔔\n\n" +
       "I'll notify you here when a coin hits a price you care about.\n\n" +
       "*Check a price:*\n" +
-      "`/price BTC`\n\n" +
+      "`/price BTC`\n" +
+      "`/price GOLD`\n\n" +
       "*Create an alert:*\n" +
       "`/alert BTC above 70000`\n" +
+      "`/alert GOLD above 2700`\n" +
       "`/alert ETH below 3000`\n\n" +
       "*Label it BUY or SELL (optional):*\n" +
       "`/alert BTC below 60000 BUY`\n" +
@@ -112,7 +149,7 @@ async function handleHelp(chatId) {
       "`/myalerts` — list your active alerts\n" +
       "`/myid` — get your dashboard ID (to view alerts on the web)\n" +
       "`/delete <id>` — delete an alert by its number\n\n" +
-      `Supported coins: ${Object.keys(SYMBOL_TO_ID).join(", ")}`
+      `Supported: ${ALL_SUPPORTED_SYMBOLS.join(", ")}`
   );
 }
 
@@ -127,17 +164,17 @@ async function handlePrice(chatId, args) {
 
   const coin = args[0].toUpperCase();
 
-  if (!isSupportedSymbol(coin)) {
+  if (!isSupportedAsset(coin)) {
     await sendMessage(
       chatId,
-      `I don't support *${coin}* yet. Supported coins: ${Object.keys(
-        SYMBOL_TO_ID
-      ).join(", ")}`
+      `I don't support *${coin}* yet. Supported: ${ALL_SUPPORTED_SYMBOLS.join(
+        ", "
+      )}`
     );
     return;
   }
 
-  const prices = await getPrices([coin]);
+  const prices = await getAssetPrices([coin]);
   const currentPrice = prices[coin];
 
   if (currentPrice === undefined) {
@@ -183,12 +220,12 @@ async function handleCreateAlert(chatId, args) {
     label = normalizedLabel;
   }
 
-  if (!isSupportedSymbol(coin)) {
+  if (!isSupportedAsset(coin)) {
     await sendMessage(
       chatId,
-      `I don't support *${coin}* yet. Supported coins: ${Object.keys(
-        SYMBOL_TO_ID
-      ).join(", ")}`
+      `I don't support *${coin}* yet. Supported: ${ALL_SUPPORTED_SYMBOLS.join(
+        ", "
+      )}`
     );
     return;
   }
@@ -237,7 +274,7 @@ async function handleCreateAlert(chatId, args) {
   // If the price fetch fails, don't block the alert confirmation on it.
   let currentPriceLine = "";
   try {
-    const prices = await getPrices([coin]);
+    const prices = await getAssetPrices([coin]);
     const currentPrice = prices[coin];
     if (currentPrice !== undefined) {
       currentPriceLine = `\nCurrent price: $${currentPrice.toLocaleString()}`;
@@ -344,7 +381,7 @@ exports.checkPrices = onSchedule(
     }
 
     const coins = [...new Set(snapshot.docs.map((doc) => doc.data().coin))];
-    const prices = await getPrices(coins);
+    const prices = await getAssetPrices(coins);
 
     const triggeredUpdates = [];
 
