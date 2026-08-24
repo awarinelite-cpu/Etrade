@@ -1,0 +1,33 @@
+rules_version = '2';
+
+// These rules assume ALL writes to `alerts`, `alert_history`, and
+// `telegram_users` happen server-side, from Cloud Functions using the
+// Admin SDK (which bypasses these rules entirely). The web dashboard is
+// read-only by design — it never writes to Firestore.
+//
+// Deploy with: firebase deploy --only firestore:rules
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Anyone can read alerts/history if they know the exact chatId to query
+    // for (obtained via /myid in the bot). This is "unlisted link" level
+    // privacy, not authenticated privacy — a chatId is not a secret in the
+    // cryptographic sense, so don't store anything more sensitive than
+    // alert configs in these collections.
+    match /alerts/{alertId} {
+      allow read: if true;
+      allow write: if false; // only Cloud Functions (Admin SDK) may write
+    }
+
+    match /alert_history/{historyId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Telegram user records are never read or written from the client.
+    match /telegram_users/{chatId} {
+      allow read, write: if false;
+    }
+  }
+}

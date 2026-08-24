@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dashboard — Signal</title>
+<meta name="description" content="View your active price alerts and history." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+
+<div class="grain"></div>
+
+<header class="nav">
+  <div class="nav-inner">
+    <a href="/" class="brand">
+      <span class="brand-dot"></span>
+      Signal
+    </a>
+    <nav class="nav-links">
+      <a href="index.html#how">How it works</a>
+      <a href="index.html#coins">Coins</a>
+      <a href="index.html#pricing">Pricing</a>
+    </nav>
+    <a class="btn btn-small" href="index.html#get-started">Open in Telegram</a>
+  </div>
+</header>
+
+<main class="dash-main">
+
+  <!-- LOOKUP STATE -->
+  <section id="lookup-view" class="dash-section">
+    <p class="eyebrow">Dashboard</p>
+    <h1 class="dash-title">View your alerts</h1>
+    <p class="dash-sub">
+      Open your bot chat on Telegram, send <code>/myid</code>, and paste the ID
+      it gives you below. This only reads your alerts — it can't create,
+      edit, or delete anything.
+    </p>
+
+    <form id="lookup-form" class="lookup-form">
+      <input
+        type="text"
+        id="chat-id-input"
+        inputmode="numeric"
+        placeholder="e.g. 123456789"
+        autocomplete="off"
+        required
+      />
+      <button type="submit" class="btn btn-primary">View alerts</button>
+    </form>
+    <p id="lookup-error" class="lookup-error" hidden></p>
+  </section>
+
+  <!-- ALERTS STATE (hidden until a lookup succeeds) -->
+  <section id="alerts-view" class="dash-section" hidden>
+    <div class="dash-header-row">
+      <div>
+        <p class="eyebrow">Dashboard</p>
+        <h1 class="dash-title">Your alerts</h1>
+      </div>
+      <button id="change-id-btn" class="btn btn-ghost btn-small">Switch ID</button>
+    </div>
+
+    <div class="dash-grid">
+      <div class="dash-panel">
+        <div class="dash-panel-head">
+          <h2>Active</h2>
+          <span id="active-count" class="dash-count">0</span>
+        </div>
+        <div id="active-list" class="alert-list">
+          <!-- populated by js -->
+        </div>
+        <p id="active-empty" class="dash-empty" hidden>
+          No active alerts. Send <code>/alert BTC above 70000</code> to the bot to create one.
+        </p>
+      </div>
+
+      <div class="dash-panel">
+        <div class="dash-panel-head">
+          <h2>History</h2>
+          <span id="history-count" class="dash-count">0</span>
+        </div>
+        <div id="history-list" class="alert-list">
+          <!-- populated by js -->
+        </div>
+        <p id="history-empty" class="dash-empty" hidden>
+          Nothing triggered yet. Once an alert fires, it'll show up here.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="loading-view" class="dash-section" hidden>
+    <p class="dash-loading">Loading your alerts…</p>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="brand footer-brand">
+      <span class="brand-dot"></span>
+      Signal
+    </div>
+    <p>Price alerts, not trades.</p>
+    <a href="index.html">Back home</a>
+  </div>
+</footer>
+
+<script type="module" src="js/firebase-config.js"></script>
+<script type="module" src="js/dashboard.js"></script>
+</body>
+</html>
