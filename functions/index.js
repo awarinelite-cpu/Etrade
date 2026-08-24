@@ -386,10 +386,10 @@ async function isPaidUser(chatId) {
 }
 
 // ---------------------------------------------------------------------------
-// Scheduled price checker — runs every 5 minutes
+// Scheduled price checker — runs every 1 minute
 // ---------------------------------------------------------------------------
 exports.checkPrices = onSchedule(
-  { schedule: "every 5 minutes", secrets: ["TELEGRAM_BOT_TOKEN"] },
+  { schedule: "every 1 minutes", secrets: ["TELEGRAM_BOT_TOKEN"] },
   async () => {
     const snapshot = await db
       .collection("alerts")
@@ -477,7 +477,7 @@ async function notifyAndReArmLater(docRef, alert, currentPrice) {
       "your target. Delete it anytime with `/delete`."
   );
 
-  // Mark disarmed so it doesn't re-fire every 5 minutes while price stays
+  // Mark disarmed so it doesn't re-fire on every check while price stays
   // past the target. It re-arms automatically once price crosses back.
   await docRef.update({
     armed: false,

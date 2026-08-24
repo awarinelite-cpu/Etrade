@@ -7,7 +7,7 @@ a price you set. No trading, no funds handled — just alerts.
 
 - **`telegramWebhook`** — receives messages from Telegram, handles commands
   like `/alert`, `/myalerts`, `/delete`.
-- **`checkPrices`** — runs every 5 minutes, fetches current prices from
+- **`checkPrices`** — runs every minute, fetches current prices from
   CoinGecko's free API, checks them against all active alerts in Firestore,
   and messages users whose alerts have triggered.
 
@@ -87,10 +87,10 @@ Firestore console → telegram_users/{chatId} → set isPaid: true
 
 ## Costs to expect
 - Firestore: free tier covers this easily at small scale
-- Cloud Functions: the scheduled check running every 5 min (~8,640
+- Cloud Functions: the scheduled check running every minute (~43,200
   invocations/month) is well within Firebase's free Blaze allowance for
   a small user base
-- CoinGecko free API: rate-limited but sufficient for a 5-minute check
+- CoinGecko free API: rate-limited but sufficient for a 1-minute check
   interval with a handful of coins
 
 ## Next steps (once this works)
