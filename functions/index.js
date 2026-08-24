@@ -54,6 +54,9 @@ async function handleCommand(chatId, text) {
     case "/myalerts":
       await handleListAlerts(chatId);
       break;
+    case "/myid":
+      await handleMyId(chatId);
+      break;
     case "/delete":
       await handleDeleteAlert(chatId, args);
       break;
@@ -101,6 +104,7 @@ async function handleHelp(chatId) {
       "`/alert <COIN> <above|below> <price> [BUY|SELL]` — create a price alert\n" +
       "  the BUY/SELL label is optional and just tags the alert for your own reference\n" +
       "`/myalerts` — list your active alerts\n" +
+      "`/myid` — get your dashboard ID (to view alerts on the web)\n" +
       "`/delete <id>` — delete an alert by its number\n\n" +
       `Supported coins: ${Object.keys(SYMBOL_TO_ID).join(", ")}`
   );
@@ -224,6 +228,16 @@ async function handleListAlerts(chatId) {
   });
 
   await sendMessage(chatId, "*Your active alerts:*\n\n" + lines.join("\n"));
+}
+
+async function handleMyId(chatId) {
+  await sendMessage(
+    chatId,
+    "*Your dashboard ID:*\n" +
+      `\`${chatId}\`\n\n` +
+      "Paste this into the web dashboard to view your alerts there.\n" +
+      "Keep it private — anyone with this ID can view (not edit) your alerts on the dashboard."
+  );
 }
 
 async function handleDeleteAlert(chatId, args) {
