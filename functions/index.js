@@ -83,6 +83,9 @@ async function handleStart(chatId) {
       "*Create an alert:*\n" +
       "`/alert BTC above 70000`\n" +
       "`/alert ETH below 3000`\n\n" +
+      "*Label it BUY or SELL (optional):*\n" +
+      "`/alert BTC below 60000 BUY`\n" +
+      "`/alert BTC above 75000 SELL`\n\n" +
       "*See your alerts:*\n" +
       "`/myalerts`\n\n" +
       "*Delete an alert:*\n" +
@@ -95,7 +98,8 @@ async function handleHelp(chatId) {
   await sendMessage(
     chatId,
     "*Commands*\n\n" +
-      "`/alert <COIN> <above|below> <price>` — create a price alert\n" +
+      "`/alert <COIN> <above|below> <price> [BUY|SELL]` — create a price alert\n" +
+      "  the BUY/SELL label is optional and just tags the alert for your own reference\n" +
       "`/myalerts` — list your active alerts\n" +
       "`/delete <id>` — delete an alert by its number\n\n" +
       `Supported coins: ${Object.keys(SYMBOL_TO_ID).join(", ")}`
@@ -103,18 +107,33 @@ async function handleHelp(chatId) {
 }
 
 async function handleCreateAlert(chatId, args) {
-  if (args.length !== 3) {
+  if (args.length < 3 || args.length > 4) {
     await sendMessage(
       chatId,
-      "Usage: `/alert <COIN> <above|below> <price>`\nExample: `/alert BTC above 70000`"
+      "Usage: `/alert <COIN> <above|below> <price> [BUY|SELL]`\n" +
+        "Example: `/alert BTC above 70000`\n" +
+        "Example with label: `/alert BTC below 60000 BUY`"
     );
     return;
   }
 
-  const [coinRaw, conditionRaw, priceRaw] = args;
+  const [coinRaw, conditionRaw, priceRaw, labelRaw] = args;
   const coin = coinRaw.toUpperCase();
   const condition = conditionRaw.toLowerCase();
   const targetPrice = parseFloat(priceRaw);
+
+  let label = null;
+  if (labelRaw !== undefined) {
+    const normalizedLabel = labelRaw.toUpperCase();
+    if (!["BUY", "SELL"].includes(normalizedLabel)) {
+      await sendMessage(
+        chatId,
+        "The optional label must be either `BUY` or `SELL`."
+      );
+      return;
+    }
+    label = normalizedLabel;
+  }
 
   if (!isSupportedSymbol(coin)) {
     await sendMessage(
@@ -158,16 +177,28 @@ async function handleCreateAlert(chatId, args) {
     coin,
     condition,
     targetPrice,
+    label,
     active: true,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     lastTriggeredAt: null,
   });
 
+  const labelPrefix = labelTag(label);
   await sendMessage(
     chatId,
-    `✅ Alert set: *${coin}* ${condition} *$${targetPrice.toLocaleString()}*\n` +
+    `✅ ${labelPrefix}Alert set: *${coin}* ${condition} *$${targetPrice.toLocaleString()}*\n` +
       `ID: \`${docRef.id.slice(0, 6)}\``
   );
+}
+
+/**
+ * Returns a display prefix for a given label, or an empty string if none.
+ * @param {"BUY"|"SELL"|null} label
+ */
+function labelTag(label) {
+  if (label === "BUY") return "🟢 BUY ZONE — ";
+  if (label === "SELL") return "🔴 SELL ZONE — ";
+  return "";
 }
 
 async function handleListAlerts(chatId) {
@@ -187,7 +218,9 @@ async function handleListAlerts(chatId) {
 
   const lines = snapshot.docs.map((doc) => {
     const d = doc.data();
-    return `\`${doc.id.slice(0, 6)}\` — ${d.coin} ${d.condition} $${d.targetPrice.toLocaleString()}`;
+    const tag = labelTag(d.label).trim();
+    const tagPrefix = tag ? `${tag} ` : "";
+    return `\`${doc.id.slice(0, 6)}\` — ${tagPrefix}${d.coin} ${d.condition} $${d.targetPrice.toLocaleString()}`;
   });
 
   await sendMessage(chatId, "*Your active alerts:*\n\n" + lines.join("\n"));
@@ -267,9 +300,11 @@ exports.checkPrices = onSchedule(
 );
 
 async function notifyAndDeactivate(docRef, alert, currentPrice) {
+  const labelPrefix = labelTag(alert.label);
+
   await sendMessage(
     alert.chatId,
-    `🚨 *${alert.coin} Alert!*\n\n` +
+    `🚨 *${labelPrefix}${alert.coin} Alert!*\n\n` +
       `${alert.coin} is now $${currentPrice.toLocaleString()}, which is ${alert.condition} ` +
       `your target of $${alert.targetPrice.toLocaleString()}.\n\n` +
       "This alert has been deactivated. Create a new one anytime with `/alert`."
@@ -287,6 +322,7 @@ async function notifyAndDeactivate(docRef, alert, currentPrice) {
     coin: alert.coin,
     condition: alert.condition,
     targetPrice: alert.targetPrice,
+    label: alert.label || null,
     triggeredAtPrice: currentPrice,
     triggeredAt: admin.firestore.FieldValue.serverTimestamp(),
   });
