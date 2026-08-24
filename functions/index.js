@@ -51,6 +51,9 @@ async function handleCommand(chatId, text) {
     case "/alert":
       await handleCreateAlert(chatId, args);
       break;
+    case "/price":
+      await handlePrice(chatId, args);
+      break;
     case "/myalerts":
       await handleListAlerts(chatId);
       break;
@@ -83,6 +86,8 @@ async function handleStart(chatId) {
     chatId,
     "*Welcome to the Crypto Alert Bot!* 🔔\n\n" +
       "I'll notify you here when a coin hits a price you care about.\n\n" +
+      "*Check a price:*\n" +
+      "`/price BTC`\n\n" +
       "*Create an alert:*\n" +
       "`/alert BTC above 70000`\n" +
       "`/alert ETH below 3000`\n\n" +
@@ -103,10 +108,49 @@ async function handleHelp(chatId) {
     "*Commands*\n\n" +
       "`/alert <COIN> <above|below> <price> [BUY|SELL]` — create a price alert\n" +
       "  the BUY/SELL label is optional and just tags the alert for your own reference\n" +
+      "`/price <COIN>` — check the current price before setting an alert\n" +
       "`/myalerts` — list your active alerts\n" +
       "`/myid` — get your dashboard ID (to view alerts on the web)\n" +
       "`/delete <id>` — delete an alert by its number\n\n" +
       `Supported coins: ${Object.keys(SYMBOL_TO_ID).join(", ")}`
+  );
+}
+
+async function handlePrice(chatId, args) {
+  if (args.length !== 1) {
+    await sendMessage(
+      chatId,
+      "Usage: `/price <COIN>`\nExample: `/price BTC`"
+    );
+    return;
+  }
+
+  const coin = args[0].toUpperCase();
+
+  if (!isSupportedSymbol(coin)) {
+    await sendMessage(
+      chatId,
+      `I don't support *${coin}* yet. Supported coins: ${Object.keys(
+        SYMBOL_TO_ID
+      ).join(", ")}`
+    );
+    return;
+  }
+
+  const prices = await getPrices([coin]);
+  const currentPrice = prices[coin];
+
+  if (currentPrice === undefined) {
+    await sendMessage(
+      chatId,
+      `Couldn't fetch a price for *${coin}* right now. Try again in a moment.`
+    );
+    return;
+  }
+
+  await sendMessage(
+    chatId,
+    `💰 *${coin}*: $${currentPrice.toLocaleString()}`
   );
 }
 
@@ -188,10 +232,24 @@ async function handleCreateAlert(chatId, args) {
   });
 
   const labelPrefix = labelTag(label);
+
+  // Best-effort: show the current price alongside the confirmation.
+  // If the price fetch fails, don't block the alert confirmation on it.
+  let currentPriceLine = "";
+  try {
+    const prices = await getPrices([coin]);
+    const currentPrice = prices[coin];
+    if (currentPrice !== undefined) {
+      currentPriceLine = `\nCurrent price: $${currentPrice.toLocaleString()}`;
+    }
+  } catch (err) {
+    console.error("Failed to fetch current price for alert confirmation:", err);
+  }
+
   await sendMessage(
     chatId,
     `✅ ${labelPrefix}Alert set: *${coin}* ${condition} *$${targetPrice.toLocaleString()}*\n` +
-      `ID: \`${docRef.id.slice(0, 6)}\``
+      `ID: \`${docRef.id.slice(0, 6)}\`${currentPriceLine}`
   );
 }
 
