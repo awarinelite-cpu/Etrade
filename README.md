@@ -94,6 +94,37 @@ Firestore console → telegram_users/{chatId} → set isPaid: true
   interval with a handful of coins
 
 ## Next steps (once this works)
-- Add a `/upgrade` command with a Paystack/Flutterwave payment link
 - Add percentage-change alerts (not just absolute price)
 - Add a simple web dashboard (React) once you have real users asking for one
+
+## Setting up `/upgrade` (Paystack payments)
+1. Create a Paystack account at https://dashboard.paystack.com/#/signup and
+   complete their verification (bank details, etc.) — payouts go straight
+   to you, Firebase/this bot never touch the money.
+2. From your Paystack dashboard, get your **secret key** (Settings → API
+   Keys & Webhooks). Use the **test** key first to try it end-to-end
+   before going live.
+3. Set it as a Firebase secret:
+   ```bash
+   firebase functions:secrets:set PAYSTACK_SECRET_KEY
+   ```
+4. In your Paystack dashboard (Settings → API Keys & Webhooks), set the
+   webhook URL to your deployed `paystackWebhook` function, e.g.:
+   ```
+   https://us-central1-e-trading-f5bec.cloudfunctions.net/paystackWebhook
+   ```
+5. Deploy:
+   ```bash
+   firebase deploy --only functions
+   ```
+6. Test with `/upgrade` in Telegram, pay with a
+   [Paystack test card](https://paystack.com/docs/payments/test-payments/),
+   and confirm you get the "Payment received" message and `/alert` no
+   longer caps at 3.
+7. Once confirmed working, swap in your **live** secret key
+   (`firebase functions:secrets:set PAYSTACK_SECRET_KEY` again) and update
+   the webhook URL/key to live mode in Paystack's dashboard.
+
+The price is set by `UPGRADE_AMOUNT_NGN` in `functions/paystack.js`
+(currently ₦2,000) — change it there.
+

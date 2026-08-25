@@ -10,6 +10,8 @@ const {
   getAssetPrices,
 } = require("./assets");
 const alertsCore = require("./alertsCore");
+const paystack = require("./paystack");
+const crypto = require("crypto");
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -89,6 +91,60 @@ exports.deleteAlertApi = onRequest(async (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Paystack webhook — marks a chatId as paid once a transaction succeeds.
+// Always re-verifies with Paystack server-to-server rather than trusting
+// the webhook body, and checks the signature so random POSTs to this URL
+// can't fake a payment.
+// ---------------------------------------------------------------------------
+exports.paystackWebhook = onRequest(
+  { secrets: ["PAYSTACK_SECRET_KEY"] },
+  async (req, res) => {
+    try {
+      const signature = req.headers["x-paystack-signature"];
+      const expected = crypto
+        .createHmac("sha512", process.env.PAYSTACK_SECRET_KEY)
+        .update(req.rawBody)
+        .digest("hex");
+
+      if (!signature || signature !== expected) {
+        console.warn("Paystack webhook: bad signature");
+        res.status(401).send("invalid signature");
+        return;
+      }
+
+      const event = req.body;
+      if (event.event === "charge.success") {
+        const reference = event.data.reference;
+        const verified = await paystack.verifyTransaction(reference);
+
+        if (verified.success && verified.chatId) {
+          await db.collection("telegram_users").doc(verified.chatId).set(
+            {
+              isPaid: true,
+              paidAt: admin.firestore.FieldValue.serverTimestamp(),
+              lastPaymentReference: verified.reference,
+            },
+            { merge: true }
+          );
+          await sendMessage(
+            verified.chatId,
+            "✅ *Payment received — you're upgraded!*\n\n" +
+              "Your active alert limit is now unlimited. Thanks for supporting the bot!"
+          );
+        }
+      }
+
+      res.status(200).send("ok");
+    } catch (err) {
+      console.error("Paystack webhook error:", err);
+      // 200 so Paystack doesn't hammer retries on our bugs; verify-on-read
+      // elsewhere means a missed webhook isn't catastrophic.
+      res.status(200).send("ok");
+    }
+  }
+);
+
 async function handleCommand(chatId, text) {
   const [command, ...args] = text.split(/\s+/);
 
@@ -107,6 +163,9 @@ async function handleCommand(chatId, text) {
       break;
     case "/myid":
       await handleMyId(chatId);
+      break;
+    case "/upgrade":
+      await handleUpgrade(chatId);
       break;
     case "/delete":
       await handleDeleteAlert(chatId, args);
@@ -148,6 +207,7 @@ async function handleStart(chatId) {
       "`/myalerts`\n\n" +
       "*Delete an alert:*\n" +
       "`/delete <id>`\n\n" +
+      "*Free plan:* up to 3 active alerts. `/upgrade` for unlimited.\n\n" +
       "Send /help anytime for this message again."
   );
 }
@@ -162,7 +222,8 @@ async function handleHelp(chatId) {
       "`/price <COIN>` — check the current price before setting an alert\n" +
       "`/myalerts` — list your active alerts\n" +
       "`/myid` — get your dashboard ID (to view alerts on the web)\n" +
-      "`/delete <id>` — delete an alert by its number\n\n" +
+      "`/delete <id>` — delete an alert by its number\n" +
+      "`/upgrade` — remove the 3-alert free limit\n\n" +
       `Supported: ${ALL_SUPPORTED_SYMBOLS.join(", ")}`
   );
 }
@@ -339,6 +400,30 @@ async function handleMyId(chatId) {
       "Paste this into the web dashboard to view your alerts there.\n" +
       "Keep it private — anyone with this ID can view (not edit) your alerts on the dashboard."
   );
+}
+
+async function handleUpgrade(chatId) {
+  const alreadyPaid = await alertsCore.isPaidUser(chatId);
+  if (alreadyPaid) {
+    await sendMessage(chatId, "You're already upgraded — unlimited alerts are active. 🎉");
+    return;
+  }
+
+  try {
+    const { authorizationUrl } = await paystack.initializeUpgrade(chatId);
+    await sendMessage(
+      chatId,
+      `💳 *Upgrade to unlimited alerts — ₦${paystack.UPGRADE_AMOUNT_NGN.toLocaleString()}*\n\n` +
+        `Pay here: ${authorizationUrl}\n\n` +
+        "Once payment goes through, I'll message you here automatically — no need to do anything else."
+    );
+  } catch (err) {
+    console.error("Upgrade init failed:", err);
+    await sendMessage(
+      chatId,
+      "Couldn't start the payment right now. Please try again in a moment."
+    );
+  }
 }
 
 async function handleDeleteAlert(chatId, args) {

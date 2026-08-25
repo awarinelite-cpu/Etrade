@@ -51,7 +51,7 @@ async function createAlert({ chatId, coin, condition, targetPrice, label, repeat
   if (!isPaid && existingAlerts.size >= FREE_TIER_ALERT_LIMIT) {
     return {
       ok: false,
-      error: `Free plan allows up to ${FREE_TIER_ALERT_LIMIT} active alerts. Delete one to add another.`,
+      error: `Free plan allows up to ${FREE_TIER_ALERT_LIMIT} active alerts. Delete one, or send /upgrade for unlimited.`,
     };
   }
 
