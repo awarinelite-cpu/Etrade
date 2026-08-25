@@ -10,9 +10,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.png', 'apple-touch-icon.png'],
       manifest: {
-        name: 'Signal — Crypto & Metals Price Alerts',
-        short_name: 'Signal',
-        description: "Set a price. Get a message the second it's hit.",
+        name: 'E-Trading — Crypto & Metals Price Alerts',
+        short_name: 'E-Trading',
+        description: "Elite Trading Alert System — set a price, get a message the second it's hit.",
         theme_color: '#0B0F14',
         background_color: '#0B0F14',
         display: 'standalone',

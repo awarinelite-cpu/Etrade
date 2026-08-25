@@ -7,7 +7,7 @@ export default function Landing() {
       <header className="max-w-5xl mx-auto px-6 pt-6 flex items-center justify-between">
         <div className="flex items-center gap-2 font-display font-semibold text-white">
           <span className="h-2 w-2 rounded-full bg-buy" />
-          Signal
+          E-Trading
         </div>
         <nav className="flex items-center gap-6">
           <Link to="/dashboard" className="text-sm text-fog-bright hover:text-white transition-colors">
@@ -77,6 +77,12 @@ export default function Landing() {
           </div>
         </div>
       </main>
+
+      <footer className="max-w-5xl mx-auto px-6 pb-10 text-center">
+        <p className="font-mono text-xs text-fog-dim">
+          Elite Trading Alert System · All rights reserved © 2026
+        </p>
+      </footer>
     </div>
   );
 }

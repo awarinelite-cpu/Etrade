@@ -30,9 +30,10 @@ export default function Dashboard() {
 
   if (!chatId) {
     return (
-      <div className="min-h-screen px-6">
+      <div className="min-h-screen px-6 flex flex-col">
         <TopNav />
         <ChatIdGate onSubmit={setChatId} error={error} />
+        <Footer />
       </div>
     );
   }
@@ -108,6 +109,7 @@ export default function Dashboard() {
           <HistoryList history={history} />
         )}
       </div>
+      <Footer />
     </div>
   );
 }
@@ -117,7 +119,7 @@ function TopNav() {
     <header className="max-w-3xl mx-auto pt-6 flex items-center justify-between">
       <Link to="/" className="flex items-center gap-2 font-display font-semibold text-white">
         <span className="h-2 w-2 rounded-full bg-buy" />
-        Signal
+        E-Trading
       </Link>
       <a
         href="https://t.me/E_TradingSignalAlertsBot"
@@ -128,5 +130,15 @@ function TopNav() {
         Open in Telegram
       </a>
     </header>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="max-w-3xl mx-auto w-full pt-10 pb-6 text-center">
+      <p className="font-mono text-xs text-fog-dim">
+        Elite Trading Alert System · All rights reserved © 2026
+      </p>
+    </footer>
   );
 }
