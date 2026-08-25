@@ -1,12 +1,11 @@
 // Firebase web config is safe to expose in client-side code — it identifies
 // the project, it does not authenticate as an admin. Access control is
-// enforced separately by Firestore Security Rules, not by hiding this file.
-//
-// See: firestore.rules in this repo for the rules that make the dashboard's
-// read-only, ID-scoped access actually safe.
-
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+// enforced by Firestore Security Rules (see /firestore.rules), which allow
+// public reads on alerts/alert_history (unlisted-link privacy, scoped by
+// chatId) and block all client writes. Writes go through the Cloud
+// Functions HTTP API instead — see src/lib/api.js.
+import { initializeApp } from "firebase/app";
+import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBp1jqWXwjwEU5J9c-iM967tdXg6EgLPhw",

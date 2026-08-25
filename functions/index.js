@@ -4,49 +4,17 @@ const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 
 const { sendMessage } = require("./telegram");
-const { getPrices, isSupportedSymbol, SYMBOL_TO_ID } = require("./prices");
 const {
-  getMetalPrices,
-  isSupportedMetal,
-  METAL_SYMBOL_TO_ID,
-} = require("./metals");
-
-// Combined list of every symbol the bot supports, across both asset types,
-// for help text and error messages.
-const ALL_SUPPORTED_SYMBOLS = [
-  ...Object.keys(SYMBOL_TO_ID),
-  ...Object.keys(METAL_SYMBOL_TO_ID),
-];
-
-/** True if the symbol is a supported coin OR a supported metal. */
-function isSupportedAsset(symbol) {
-  return isSupportedSymbol(symbol) || isSupportedMetal(symbol);
-}
-
-/**
- * Fetch current USD prices for a mixed list of symbols, routing each to
- * the right source (CoinGecko for coins, gold-api.com for metals).
- * @param {string[]} symbols
- * @returns {Promise<Object>} map of symbol -> price in USD
- */
-async function getAssetPrices(symbols) {
-  const coinSymbols = symbols.filter((s) => isSupportedSymbol(s));
-  const metalSymbols = symbols.filter((s) => isSupportedMetal(s));
-
-  const [coinPrices, metalPrices] = await Promise.all([
-    coinSymbols.length ? getPrices(coinSymbols) : {},
-    metalSymbols.length ? getMetalPrices(metalSymbols) : {},
-  ]);
-
-  return { ...coinPrices, ...metalPrices };
-}
+  ALL_SUPPORTED_SYMBOLS,
+  isSupportedAsset,
+  getAssetPrices,
+} = require("./assets");
+const alertsCore = require("./alertsCore");
 
 admin.initializeApp();
 const db = admin.firestore();
 
 setGlobalOptions({ maxInstances: 5 });
-
-const FREE_TIER_ALERT_LIMIT = 3;
 
 // ---------------------------------------------------------------------------
 // Telegram webhook — handles all bot commands
@@ -75,6 +43,51 @@ exports.telegramWebhook = onRequest(
     }
   }
 );
+
+// ---------------------------------------------------------------------------
+// Web dashboard API — lets the React app create/edit/delete alerts.
+//
+// Ownership check is chatId-based, same "unlisted-link" privacy model the
+// rest of the app already uses (see firestore.rules): anyone who has a
+// chatId (from /myid in Telegram) can manage alerts under it. There is no
+// real user authentication here. All actual Firestore writes stay
+// server-side via the Admin SDK, same as the bot — the client never writes
+// to Firestore directly.
+// ---------------------------------------------------------------------------
+const cors = require("cors")({ origin: true });
+
+exports.createAlertApi = onRequest(async (req, res) => {
+  cors(req, res, async () => {
+    if (req.method !== "POST") {
+      res.status(405).json({ ok: false, error: "Use POST." });
+      return;
+    }
+    const result = await alertsCore.createAlert(req.body || {});
+    res.status(result.ok ? 200 : 400).json(result);
+  });
+});
+
+exports.updateAlertApi = onRequest(async (req, res) => {
+  cors(req, res, async () => {
+    if (req.method !== "POST") {
+      res.status(405).json({ ok: false, error: "Use POST." });
+      return;
+    }
+    const result = await alertsCore.updateAlert(req.body || {});
+    res.status(result.ok ? 200 : 400).json(result);
+  });
+});
+
+exports.deleteAlertApi = onRequest(async (req, res) => {
+  cors(req, res, async () => {
+    if (req.method !== "POST") {
+      res.status(405).json({ ok: false, error: "Use POST." });
+      return;
+    }
+    const result = await alertsCore.deleteAlert(req.body || {});
+    res.status(result.ok ? 200 : 400).json(result);
+  });
+});
 
 async function handleCommand(chatId, text) {
   const [command, ...args] = text.split(/\s+/);
@@ -254,59 +267,31 @@ async function handleCreateAlert(chatId, args) {
     return;
   }
 
-  // Enforce free tier limit
-  const existingAlerts = await db
-    .collection("alerts")
-    .where("chatId", "==", String(chatId))
-    .where("active", "==", true)
-    .get();
-
-  const isPaid = await isPaidUser(chatId);
-  if (!isPaid && existingAlerts.size >= FREE_TIER_ALERT_LIMIT) {
-    await sendMessage(
-      chatId,
-      `Free plan allows up to ${FREE_TIER_ALERT_LIMIT} active alerts. ` +
-        "Delete one with `/delete <id>` or upgrade to add more."
-    );
-    return;
-  }
-
-  const docRef = await db.collection("alerts").add({
-    chatId: String(chatId),
+  const result = await alertsCore.createAlert({
+    chatId,
     coin,
     condition,
     targetPrice,
     label,
     repeat,
-    // "armed" tracks whether this alert is ready to fire next time the
-    // condition is met. Only meaningful for repeating alerts — one-shot
-    // alerts just deactivate on trigger instead of re-arming.
-    armed: true,
-    active: true,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    lastTriggeredAt: null,
   });
+
+  if (!result.ok) {
+    await sendMessage(chatId, result.error);
+    return;
+  }
 
   const labelPrefix = labelTag(label);
   const repeatSuffix = repeat ? " 🔁 (repeating)" : "";
-
-  // Best-effort: show the current price alongside the confirmation.
-  // If the price fetch fails, don't block the alert confirmation on it.
-  let currentPriceLine = "";
-  try {
-    const prices = await getAssetPrices([coin]);
-    const currentPrice = prices[coin];
-    if (currentPrice !== undefined) {
-      currentPriceLine = `\nCurrent price: $${currentPrice.toLocaleString()}`;
-    }
-  } catch (err) {
-    console.error("Failed to fetch current price for alert confirmation:", err);
-  }
+  const currentPriceLine =
+    result.currentPrice !== undefined
+      ? `\nCurrent price: $${result.currentPrice.toLocaleString()}`
+      : "";
 
   await sendMessage(
     chatId,
     `✅ ${labelPrefix}Alert set: *${coin}* ${condition} *$${targetPrice.toLocaleString()}*${repeatSuffix}\n` +
-      `ID: \`${docRef.id.slice(0, 6)}\`${currentPriceLine}`
+      `ID: \`${result.id.slice(0, 6)}\`${currentPriceLine}`
   );
 }
 
@@ -378,11 +363,6 @@ async function handleDeleteAlert(chatId, args) {
 
   await match.ref.update({ active: false });
   await sendMessage(chatId, "🗑️ Alert deleted.");
-}
-
-async function isPaidUser(chatId) {
-  const doc = await db.collection("telegram_users").doc(String(chatId)).get();
-  return Boolean(doc.exists && doc.data().isPaid);
 }
 
 // ---------------------------------------------------------------------------

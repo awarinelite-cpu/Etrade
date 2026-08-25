@@ -1,5 +1,9 @@
 {
-  "outputDirectory": "site",
+  "buildCommand": "cd site && npm install && npm run build",
+  "outputDirectory": "site/dist",
   "cleanUrls": true,
-  "trailingSlash": false
+  "trailingSlash": false,
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }

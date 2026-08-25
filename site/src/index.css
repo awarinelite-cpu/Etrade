@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  ::selection { background: theme('colors.buy'); color: theme('colors.ink'); }
+  body {
+    background: theme('colors.ink');
+    color: theme('colors.white');
+    font-family: theme('fontFamily.body');
+  }
+  :focus-visible {
+    outline: 2px solid theme('colors.amber');
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .font-tabular { font-variant-numeric: tabular-nums; }
+}

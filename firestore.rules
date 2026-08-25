@@ -2,8 +2,12 @@ rules_version = '2';
 
 // These rules assume ALL writes to `alerts`, `alert_history`, and
 // `telegram_users` happen server-side, from Cloud Functions using the
-// Admin SDK (which bypasses these rules entirely). The web dashboard is
-// read-only by design — it never writes to Firestore.
+// Admin SDK (which bypasses these rules entirely). The web dashboard
+// reads Firestore directly (real-time via onSnapshot) but never writes
+// to it — creating/editing/deleting an alert from the dashboard calls
+// the createAlertApi/updateAlertApi/deleteAlertApi Cloud Functions
+// instead, which apply the same chatId-ownership and free-tier checks
+// as the Telegram bot before touching Firestore.
 //
 // Deploy with: firebase deploy --only firestore:rules
 
