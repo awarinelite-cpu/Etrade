@@ -23,7 +23,13 @@ async function initializeUpgrade(chatId) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      email: `telegram-${chatId}@placeholder.invalid`,
+      // Paystack requires a syntactically valid email but doesn't verify
+      // deliverability, and we don't have the user's real email (Telegram
+      // doesn't give us one) — using a fake-but-valid-looking address tied
+      // to their chatId is the standard workaround. Reserved TLDs like
+      // ".invalid" or ".example" get rejected by Paystack's validator, so
+      // use a real domain we control instead.
+      email: `telegram-${chatId}@e-topaz.vercel.app`,
       amount: UPGRADE_AMOUNT_NGN * 100,
       currency: "NGN",
       metadata: { chatId: String(chatId) },
