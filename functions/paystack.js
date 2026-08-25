@@ -33,10 +33,12 @@ async function initializeUpgrade(chatId) {
       amount: UPGRADE_AMOUNT_NGN * 100,
       currency: "NGN",
       metadata: { chatId: String(chatId) },
-      // Paystack requires a callback_url; the user is paying from a
-      // Telegram-shared link in their browser, so just send them back
-      // to the bot afterward. Nothing functionally depends on this page.
-      callback_url: "https://t.me/E_TradingSignalAlertsBot",
+      // Paystack requires a callback_url and appends its own tracking
+      // query params (?trxref=...&reference=...) to whatever we set here.
+      // Pointing straight at a t.me link breaks in some Telegram clients
+      // once those extra params are tacked on ("username not found"), so
+      // land on our own success page instead, which has a clean link.
+      callback_url: "https://e-topaz.vercel.app/upgrade-success",
     }),
   });
   const data = await res.json();
