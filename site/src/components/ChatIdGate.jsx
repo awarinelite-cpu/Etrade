@@ -3,10 +3,19 @@ import { useState } from "react";
 export default function ChatIdGate({ onSubmit, error }) {
   const [value, setValue] = useState("");
 
+  const [localError, setLocalError] = useState("");
+
   function handleSubmit(e) {
     e.preventDefault();
     const trimmed = value.trim();
     if (!trimmed) return;
+    if (!/^-?\d+$/.test(trimmed)) {
+      setLocalError(
+        "That doesn't look like a chat ID — it should be numbers only (e.g. 123456789), from /myid in Telegram."
+      );
+      return;
+    }
+    setLocalError("");
     onSubmit(trimmed);
   }
 
@@ -34,7 +43,9 @@ export default function ChatIdGate({ onSubmit, error }) {
           View alerts
         </button>
       </form>
-      {error && <p className="text-sell text-xs">{error}</p>}
+      {(localError || error) && (
+        <p className="text-sell text-xs">{localError || error}</p>
+      )}
     </div>
   );
 }
