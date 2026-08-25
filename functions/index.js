@@ -11,7 +11,14 @@ const {
 } = require("./assets");
 const alertsCore = require("./alertsCore");
 const paystack = require("./paystack");
+const exchange = require("./exchange");
 const crypto = require("crypto");
+
+// Only this chat ID may use trading commands. Trading uses YOUR exchange
+// API keys, not the user's — so without this gate, any Telegram user who
+// finds the bot could place orders on your account. Get your own with
+// /myid.
+const OWNER_CHAT_ID = "8906534783";
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -22,7 +29,7 @@ setGlobalOptions({ maxInstances: 5 });
 // Telegram webhook — handles all bot commands
 // ---------------------------------------------------------------------------
 exports.telegramWebhook = onRequest(
-  { secrets: ["TELEGRAM_BOT_TOKEN", "PAYSTACK_SECRET_KEY"] },
+  { secrets: ["TELEGRAM_BOT_TOKEN", "PAYSTACK_SECRET_KEY", "BINANCE_API_KEY", "BINANCE_API_SECRET"] },
   async (req, res) => {
     try {
       const update = req.body;
@@ -166,6 +173,15 @@ async function handleCommand(chatId, text) {
       break;
     case "/upgrade":
       await handleUpgrade(chatId);
+      break;
+    case "/balance":
+      await handleBalance(chatId);
+      break;
+    case "/buy":
+      await handleTrade(chatId, args, "buy");
+      break;
+    case "/sell":
+      await handleTrade(chatId, args, "sell");
       break;
     case "/delete":
       await handleDeleteAlert(chatId, args);
@@ -439,6 +455,62 @@ async function handleUpgrade(chatId) {
       chatId,
       "Couldn't start the payment right now. Please try again in a moment."
     );
+  }
+}
+
+async function handleBalance(chatId) {
+  if (String(chatId) !== OWNER_CHAT_ID) {
+    await sendMessage(chatId, "This command isn't available.");
+    return;
+  }
+  try {
+    const balances = await exchange.getBalance();
+    const entries = Object.entries(balances);
+    const mode = exchange.USE_TESTNET ? "TESTNET (fake funds)" : "⚠️ LIVE";
+    if (entries.length === 0) {
+      await sendMessage(chatId, `*Balance* (${mode})\n\nNothing to show.`);
+      return;
+    }
+    const lines = entries.map(([asset, amt]) => `${asset}: ${amt}`);
+    await sendMessage(chatId, `*Balance* (${mode})\n\n${lines.join("\n")}`);
+  } catch (err) {
+    console.error("Balance fetch failed:", err);
+    await sendMessage(chatId, `Couldn't fetch balance: ${err.message}`);
+  }
+}
+
+async function handleTrade(chatId, args, side) {
+  if (String(chatId) !== OWNER_CHAT_ID) {
+    await sendMessage(chatId, "This command isn't available.");
+    return;
+  }
+  if (args.length !== 2) {
+    await sendMessage(
+      chatId,
+      `Usage: \`/${side} <SYMBOL> <AMOUNT>\`\nExample: \`/${side} BTC/USDT 0.001\``
+    );
+    return;
+  }
+  const [symbol, amountStr] = args;
+  const amount = Number(amountStr);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    await sendMessage(chatId, "Amount must be a positive number.");
+    return;
+  }
+
+  const mode = exchange.USE_TESTNET ? "TESTNET" : "⚠️ LIVE — REAL FUNDS";
+  try {
+    const order = await exchange.placeMarketOrder(symbol, side, amount);
+    await sendMessage(
+      chatId,
+      `✅ *${side.toUpperCase()} order placed* (${mode})\n\n` +
+        `${symbol} — ${amount}\n` +
+        `Order ID: \`${order.id}\`\n` +
+        `Status: ${order.status || "submitted"}`
+    );
+  } catch (err) {
+    console.error("Trade failed:", err);
+    await sendMessage(chatId, `Order failed: ${err.message}`);
   }
 }
 

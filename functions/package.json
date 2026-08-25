@@ -12,6 +12,7 @@
     "logs": "firebase functions:log"
   },
   "dependencies": {
+    "ccxt": "^4.5.75",
     "cors": "^2.8.6",
     "firebase-admin": "^12.1.0",
     "firebase-functions": "^5.0.0",
