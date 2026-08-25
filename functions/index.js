@@ -22,7 +22,7 @@ setGlobalOptions({ maxInstances: 5 });
 // Telegram webhook — handles all bot commands
 // ---------------------------------------------------------------------------
 exports.telegramWebhook = onRequest(
-  { secrets: ["TELEGRAM_BOT_TOKEN"] },
+  { secrets: ["TELEGRAM_BOT_TOKEN", "PAYSTACK_SECRET_KEY"] },
   async (req, res) => {
     try {
       const update = req.body;
