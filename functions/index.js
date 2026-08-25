@@ -354,7 +354,12 @@ async function handleDeleteAlert(chatId, args) {
     .where("active", "==", true)
     .get();
 
-  const match = snapshot.docs.find((doc) => doc.id.startsWith(shortId));
+  // Case-insensitive match — Firestore doc IDs are mixed-case, and it's
+  // easy to mistype/mis-capitalize a character when typing a 6-char ID
+  // on a phone keyboard.
+  const match = snapshot.docs.find((doc) =>
+    doc.id.toLowerCase().startsWith(shortId.toLowerCase())
+  );
 
   if (!match) {
     await sendMessage(chatId, "No matching alert found. Check `/myalerts` for valid IDs.");
