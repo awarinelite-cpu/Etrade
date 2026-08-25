@@ -14,7 +14,8 @@ export default function Dashboard() {
   const [tab, setTab] = useState("active");
 
   const { alerts, loading, error } = useActiveAlerts(chatId || null);
-  const { history } = useAlertHistory(chatId || null);
+  const { history, error: historyError } = useAlertHistory(chatId || null);
+  const displayError = error || historyError;
   const coins = alerts.map((a) => a.coin);
   const prices = useLivePrices(coins);
 
@@ -73,6 +74,12 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
+
+        {displayError && (
+          <div className="mb-6 rounded-md border border-sell bg-sell/10 px-3 py-2 text-xs font-mono text-sell">
+            {displayError}
+          </div>
+        )}
 
         {tab === "active" ? (
           <div className="grid gap-4 sm:grid-cols-2">

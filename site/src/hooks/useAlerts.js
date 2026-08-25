@@ -36,7 +36,12 @@ export function useActiveAlerts(chatId) {
       },
       (err) => {
         console.error("Failed to load alerts:", err);
-        setError("Couldn't load alerts for that ID. Double check it with /myid in Telegram.");
+        setError(
+          `Couldn't load alerts (${err.code || "unknown error"}). ` +
+            (err.code === "permission-denied"
+              ? "Firestore security rules are blocking reads — they need to be deployed (firebase deploy --only firestore:rules)."
+              : "Double check the chat ID with /myid in Telegram, or check the browser console for details.")
+        );
         setLoading(false);
       }
     );
@@ -50,6 +55,7 @@ export function useActiveAlerts(chatId) {
 export function useAlertHistory(chatId, max = 20) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     if (!chatId) {
@@ -72,11 +78,17 @@ export function useAlertHistory(chatId, max = 20) {
       },
       (err) => {
         console.error("Failed to load alert history:", err);
+        setError(
+          `Couldn't load history (${err.code || "unknown error"}). ` +
+            (err.code === "permission-denied"
+              ? "Firestore security rules are blocking reads — they need to be deployed (firebase deploy --only firestore:rules)."
+              : "Check the browser console for details.")
+        );
         setLoading(false);
       }
     );
     return unsub;
   }, [chatId, max]);
 
-  return { history, loading };
+  return { history, loading, error };
 }
