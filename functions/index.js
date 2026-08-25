@@ -219,7 +219,7 @@ async function handleHelp(chatId) {
       "`/alert <COIN> <above|below> <price> [BUY|SELL] [REPEAT]` — create a price alert\n" +
       "  BUY/SELL is optional and just tags the alert for your own reference\n" +
       "  REPEAT keeps the alert active — it fires again each time price re-crosses your target\n" +
-      "`/price <COIN>` — check the current price before setting an alert\n" +
+      "`/price <COIN>` — check the current price before setting an alert (or `/price BTC ETH SOL` for several at once)\n" +
       "`/myalerts` — list your active alerts\n" +
       "`/myid` — get your dashboard ID (to view alerts on the web)\n" +
       "`/delete <id>` — delete an alert by its number\n" +
@@ -229,41 +229,57 @@ async function handleHelp(chatId) {
 }
 
 async function handlePrice(chatId, args) {
-  if (args.length !== 1) {
+  if (args.length === 0) {
     await sendMessage(
       chatId,
-      "Usage: `/price <COIN>`\nExample: `/price BTC`"
+      "Usage: `/price <COIN>` or `/price <COIN1> <COIN2> ...`\n" +
+        "Example: `/price BTC`\n" +
+        "Example: `/price BTC ETH SOL`"
     );
     return;
   }
 
-  const coin = args[0].toUpperCase();
+  // Accept space-separated ("/price BTC ETH") and comma-separated
+  // ("/price BTC, ETH, SOL" or "/price BTC,ETH,SOL") — split on commas
+  // first, then whitespace, and dedupe.
+  const requested = [
+    ...new Set(
+      args
+        .join(" ")
+        .split(",")
+        .flatMap((s) => s.trim().split(/\s+/))
+        .filter(Boolean)
+        .map((s) => s.toUpperCase())
+    ),
+  ];
 
-  if (!isSupportedAsset(coin)) {
+  const unsupported = requested.filter((s) => !isSupportedAsset(s));
+  const supported = requested.filter((s) => isSupportedAsset(s));
+
+  if (supported.length === 0) {
     await sendMessage(
       chatId,
-      `I don't support *${coin}* yet. Supported: ${ALL_SUPPORTED_SYMBOLS.join(
-        ", "
-      )}`
+      `I don't support ${unsupported
+        .map((s) => `*${s}*`)
+        .join(", ")}. Supported: ${ALL_SUPPORTED_SYMBOLS.join(", ")}`
     );
     return;
   }
 
-  const prices = await getAssetPrices([coin]);
-  const currentPrice = prices[coin];
+  const prices = await getAssetPrices(supported);
 
-  if (currentPrice === undefined) {
-    await sendMessage(
-      chatId,
-      `Couldn't fetch a price for *${coin}* right now. Try again in a moment.`
-    );
-    return;
+  const lines = supported.map((coin) => {
+    const p = prices[coin];
+    return p === undefined
+      ? `⚠️ *${coin}*: couldn't fetch right now`
+      : `💰 *${coin}*: $${p.toLocaleString()}`;
+  });
+
+  if (unsupported.length > 0) {
+    lines.push(`\nNot supported: ${unsupported.join(", ")}`);
   }
 
-  await sendMessage(
-    chatId,
-    `💰 *${coin}*: $${currentPrice.toLocaleString()}`
-  );
+  await sendMessage(chatId, lines.join("\n"));
 }
 
 async function handleCreateAlert(chatId, args) {
