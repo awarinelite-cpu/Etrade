@@ -35,6 +35,12 @@ function formatPrice(n) {
   return `$${n.toLocaleString(undefined, { maximumFractionDigits: n < 10 ? 4 : 2 })}`;
 }
 
+// Same 3s cadence useLivePrices already polls at (and what the ticker
+// panel/header price use) — keeping candle resync on this exact value
+// means the chart, the header price, and the indicators all move on
+// the same clock instead of drifting in and out of sync with each other.
+const LIVE_POLL_MS = 3000;
+
 export default function CoinDetail() {
   const { symbol: rawSymbol } = useParams();
   const symbol = (rawSymbol || "").toUpperCase();
@@ -45,7 +51,7 @@ export default function CoinDetail() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
 
-  const prices = useLivePrices(isSupportedSymbol(symbol) ? [symbol] : []);
+  const prices = useLivePrices(isSupportedSymbol(symbol) ? [symbol] : [], LIVE_POLL_MS);
   const price = prices[symbol];
 
   useEffect(() => {
@@ -69,18 +75,15 @@ export default function CoinDetail() {
       setCandles(result);
     });
 
-    // Re-sync with real Binance candles periodically so a newly-closed
-    // candle (e.g. the hour/day actually rolled over) replaces the
-    // in-progress one instead of the chart drifting from ground truth
-    // forever. Live price ticks (below) handle the second-to-second
-    // movement in between syncs. Minute-level intervals resync faster
-    // since a candle closes so much sooner at that granularity.
-    const resyncMs = interval === "1m" || interval === "5m" ? 15000 : 45000;
+    // Re-sync with real Binance candles on the same 3s cadence as the
+    // live price poll, so a newly-closed candle (e.g. the hour/day
+    // actually rolled over) replaces the in-progress one without ever
+    // lagging behind what the header price is already showing.
     const resyncId = setInterval(() => {
       fetchKlines(symbol, interval, limit).then((result) => {
         if (!cancelled && result.length > 0) setCandles(result);
       });
-    }, resyncMs);
+    }, LIVE_POLL_MS);
 
     return () => {
       cancelled = true;
