@@ -33,10 +33,10 @@ export const METAL_SYMBOL_TO_ID = {
   PALLADIUM: "XPD",
 };
 
-export const ALL_SYMBOLS = [
-  ...Object.keys(SYMBOL_TO_ID),
-  ...Object.keys(METAL_SYMBOL_TO_ID),
-];
+export const COIN_SYMBOLS = Object.keys(SYMBOL_TO_ID);
+export const METAL_SYMBOLS = Object.keys(METAL_SYMBOL_TO_ID);
+
+export const ALL_SYMBOLS = [...COIN_SYMBOLS, ...METAL_SYMBOLS];
 
 export function isSupportedSymbol(symbol) {
   return Boolean(SYMBOL_TO_ID[symbol?.toUpperCase()]);
