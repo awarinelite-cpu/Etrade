@@ -31,16 +31,31 @@ async function getMetalPrices(symbols) {
     uniqueSymbols.map(async (symbol) => {
       const assetSymbol = METAL_SYMBOL_TO_ID[symbol];
       try {
-        const res = await fetch(`${METALS_API_BASE}/price/${assetSymbol}`);
+        const res = await fetch(`${METALS_API_BASE}/price/${assetSymbol}`, {
+          headers: {
+            // Some free/no-key APIs block requests with no User-Agent,
+            // or reject default node-fetch UAs from cloud-provider IPs.
+            "User-Agent": "Mozilla/5.0 (compatible; E-TradingSignalAlertsBot/1.0)",
+            Accept: "application/json",
+          },
+        });
         if (!res.ok) {
-          throw new Error(`gold-api.com request failed: ${res.status}`);
+          const body = await res.text().catch(() => "");
+          throw new Error(
+            `gold-api.com request failed: ${res.status} ${res.statusText} — ${body.slice(0, 200)}`
+          );
         }
         const data = await res.json();
         if (typeof data.price === "number") {
           result[symbol] = data.price;
+        } else {
+          console.error(
+            `gold-api.com returned unexpected shape for ${symbol}:`,
+            JSON.stringify(data)
+          );
         }
       } catch (err) {
-        console.error(`Failed to fetch metal price for ${symbol}:`, err);
+        console.error(`Failed to fetch metal price for ${symbol}:`, err.message || err);
       }
     })
   );
