@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useLivePrices } from "../hooks/useLivePrices";
+import { COIN_SYMBOLS } from "../lib/prices";
 import Sparkline from "./Sparkline";
 
-// Back to the 4 majors as a fixed 2x2 grid of big cards. The 14-coin
-// carousel (basis-[22%] cards, 4 squeezed into one row) made the cards
-// too small to read on mobile — this is the full set of coins available
-// as alert assets elsewhere, but the ticker panel itself only ever
-// needs to show the majors at a readable size.
-const TICKER_SYMBOLS = ["BTC", "ETH", "SOL", "XRP"];
+// All 14 coins, kept big and readable by paging 4-per-screen (2x2 grid)
+// instead of shrinking every card to fit them all in one row. Same card
+// size/styling as the original 4-major design — just paginated.
+const TICKER_SYMBOLS = COIN_SYMBOLS;
+const CARDS_PER_PAGE = 4;
 
 // How many ticks to keep per symbol for the sparkline. At the 3s poll
 // interval this is a ~2 minute rolling window, long enough to show real
@@ -37,6 +37,17 @@ export default function LiveTickerPanel() {
   const prices = useLivePrices(TICKER_SYMBOLS, 3000);
   const historyRef = useRef({});
   const [, bumpVersion] = useState(0);
+  const [page, setPage] = useState(0);
+  const pageCount = Math.ceil(TICKER_SYMBOLS.length / CARDS_PER_PAGE);
+
+  function goToPage(next) {
+    setPage(((next % pageCount) + pageCount) % pageCount);
+  }
+
+  const visibleSymbols = TICKER_SYMBOLS.slice(
+    page * CARDS_PER_PAGE,
+    page * CARDS_PER_PAGE + CARDS_PER_PAGE
+  );
 
   useEffect(() => {
     let changed = false;
@@ -54,8 +65,9 @@ export default function LiveTickerPanel() {
   }, [prices]);
 
   return (
-    <div className="grid grid-cols-2 gap-3">
-      {TICKER_SYMBOLS.map((symbol) => {
+    <div className="relative">
+      <div className="grid grid-cols-2 gap-3">
+      {visibleSymbols.map((symbol) => {
         const history = historyRef.current[symbol] || [];
         const price = prices[symbol];
         const openPrice = history[0];
@@ -90,6 +102,41 @@ export default function LiveTickerPanel() {
           </div>
         );
       })}
+      </div>
+
+      {pageCount > 1 && (
+        <div className="flex items-center justify-center gap-4 mt-3">
+          <button
+            type="button"
+            aria-label="Previous page"
+            onClick={() => goToPage(page - 1)}
+            className="flex items-center justify-center w-7 h-7 rounded-full border border-paper-border bg-paper text-fog-dim hover:text-white"
+          >
+            ‹
+          </button>
+          <div className="flex items-center gap-1.5">
+            {Array.from({ length: pageCount }).map((_, i) => (
+              <button
+                key={i}
+                type="button"
+                aria-label={`Go to page ${i + 1}`}
+                onClick={() => goToPage(i)}
+                className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                  i === page ? "bg-white" : "bg-paper-border"
+                }`}
+              />
+            ))}
+          </div>
+          <button
+            type="button"
+            aria-label="Next page"
+            onClick={() => goToPage(page + 1)}
+            className="flex items-center justify-center w-7 h-7 rounded-full border border-paper-border bg-paper text-fog-dim hover:text-white"
+          >
+            ›
+          </button>
+        </div>
+      )}
     </div>
   );
 }
