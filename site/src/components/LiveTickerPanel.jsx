@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useLivePrices } from "../hooks/useLivePrices";
 import { COIN_SYMBOLS } from "../lib/prices";
 import Sparkline from "./Sparkline";
@@ -80,10 +81,11 @@ export default function LiveTickerPanel() {
           pct > 0 ? "text-buy" : pct < 0 ? "text-sell" : "text-fog-dim";
 
         return (
-          <div
+          <Link
             key={symbol}
+            to={`/coin/${symbol}`}
             data-ticker-card
-            className="rounded-xl border border-paper-border bg-paper p-4 flex flex-col gap-2"
+            className="rounded-xl border border-paper-border bg-paper p-4 flex flex-col gap-2 active:border-fog-dim transition-colors"
           >
             <div className="flex items-center justify-between gap-1">
               <span className="text-sm font-mono text-fog-dim">{symbol}</span>
@@ -99,7 +101,7 @@ export default function LiveTickerPanel() {
             <div className="mt-1 w-full">
               <Sparkline data={history} width={160} height={48} />
             </div>
-          </div>
+          </Link>
         );
       })}
       </div>
