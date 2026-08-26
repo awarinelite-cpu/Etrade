@@ -41,9 +41,11 @@ export default function LiveTickerPanel() {
   function scrollByCards(direction) {
     const el = scrollerRef.current;
     if (!el) return;
-    const card = el.querySelector("[data-ticker-card]");
-    const cardWidth = card ? card.offsetWidth + 12 /* gap-3 */ : 160;
-    el.scrollBy({ left: direction * cardWidth * 2, behavior: "smooth" });
+    // Scroll a full "page" (the width of the visible viewport) so the
+    // carousel always advances by exactly the set of cards currently on
+    // screen — 4 at a time — all the way through the 14 coins, rather
+    // than a fixed 2-card jump that drifted out of sync with what's shown.
+    el.scrollBy({ left: direction * el.clientWidth, behavior: "smooth" });
   }
 
   useEffect(() => {
@@ -65,7 +67,7 @@ export default function LiveTickerPanel() {
     <div className="relative group">
       <div
         ref={scrollerRef}
-        className="flex gap-3 overflow-x-auto snap-x snap-mandatory scroll-smooth pb-1 -mx-1 px-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+        className="flex gap-2 overflow-x-auto snap-x snap-mandatory scroll-smooth pb-1 -mx-1 px-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
       >
         {TICKER_SYMBOLS.map((symbol) => {
           const history = historyRef.current[symbol] || [];
@@ -83,23 +85,23 @@ export default function LiveTickerPanel() {
             <div
               key={symbol}
               data-ticker-card
-              className="snap-start shrink-0 basis-[45%] sm:basis-[23%] rounded-md border border-paper-border bg-paper p-3 flex flex-col gap-1"
+              className="snap-start shrink-0 basis-[22%] min-w-[76px] rounded-md border border-paper-border bg-paper p-2 flex flex-col gap-1"
             >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono text-fog-dim">
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[10px] font-mono text-fog-dim truncate">
                   {symbol}
                 </span>
                 {changeLabel && (
-                  <span className={`text-xs font-mono ${changeColor}`}>
+                  <span className={`text-[10px] font-mono ${changeColor} shrink-0`}>
                     {changeLabel}
                   </span>
                 )}
               </div>
-              <span className="font-mono text-lg text-white font-tabular">
+              <span className="font-mono text-sm sm:text-base text-white font-tabular truncate">
                 {formatPrice(price)}
               </span>
-              <div className="mt-1">
-                <Sparkline data={history} width={140} height={36} />
+              <div className="mt-1 w-full">
+                <Sparkline data={history} width={80} height={28} />
               </div>
             </div>
           );

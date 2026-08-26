@@ -9,8 +9,12 @@ const SELL = "#FF5C5C";
  * Draws nothing until there are at least 2 points to connect.
  */
 export default function Sparkline({ data, width = 120, height = 40 }) {
+  // `width` is only used below for the internal viewBox/point math — the
+  // rendered <svg> itself is width="100%" so it stretches to fill whatever
+  // card it's dropped into (4-up mobile cards are much narrower than the
+  // old 2-up ones). preserveAspectRatio="none" does the actual stretching.
   if (!data || data.length < 2) {
-    return <svg width={width} height={height} className="block" />;
+    return <svg width="100%" height={height} className="block" />;
   }
 
   const min = Math.min(...data);
@@ -36,7 +40,7 @@ export default function Sparkline({ data, width = 120, height = 40 }) {
 
   return (
     <svg
-      width={width}
+      width="100%"
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
