@@ -28,6 +28,79 @@ const cache = {};
 const CACHE_TTL_MS = 30 * 1000;
 const STALE_MAX_AGE_MS = 10 * 60 * 1000;
 
+// stream-service (see /stream-service) holds a live Binance WebSocket and
+// exposes its in-memory prices at GET /status. When it's reachable, /price
+// uses that instead of CoinGecko — it's the exact number alerts are being
+// evaluated against in real time, not a 30s-old cached lookup. Falls
+// through to CoinGecko for anything the stream doesn't have (e.g. the
+// service is down, or hasn't seen a trade tick for that symbol yet).
+// Defaults to the deployed europe-west1 instance (see stream-service/README.md
+// for why that region — Binance geo-blocks US Cloud Run IPs). Override with
+// the STREAM_SERVICE_URL env var if you ever redeploy it elsewhere; if set
+// to an empty string, this step is skipped entirely and CoinGecko handles
+// everything, same as before the stream service existed.
+const STREAM_SERVICE_URL =
+  process.env.STREAM_SERVICE_URL !== undefined
+    ? process.env.STREAM_SERVICE_URL
+    : "https://etrade-binance-stream-514319786782.europe-west1.run.app";
+const STREAM_FETCH_TIMEOUT_MS = 2500;
+
+/**
+ * Fetch an identity token for calling another Cloud Run/Functions service
+ * as this function's own service account, via the GCP metadata server.
+ * Only works when actually running on GCP (Cloud Functions/Cloud Run);
+ * fails harmlessly in any other environment, which the caller catches.
+ */
+async function getIdentityToken(audience) {
+  const res = await fetch(
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?" +
+      `audience=${encodeURIComponent(audience)}&format=full`,
+    { headers: { "Metadata-Flavor": "Google" } }
+  );
+  if (!res.ok) {
+    throw new Error(`metadata identity token fetch failed: ${res.status}`);
+  }
+  return res.text();
+}
+
+/**
+ * Best-effort fetch of live prices from stream-service. Never throws —
+ * returns {} on any failure (service down, not configured, timed out,
+ * symbol not yet streamed) so callers can just fall through to CoinGecko.
+ */
+async function getLiveStreamPrices(symbols) {
+  if (!STREAM_SERVICE_URL) return {};
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), STREAM_FETCH_TIMEOUT_MS);
+
+  try {
+    const token = await getIdentityToken(STREAM_SERVICE_URL);
+    const res = await fetch(`${STREAM_SERVICE_URL}/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`stream-service /status failed: ${res.status}`);
+    }
+    const data = await res.json();
+    const live = data.latestPrice || {};
+
+    const result = {};
+    for (const symbol of symbols) {
+      if (typeof live[symbol] === "number") {
+        result[symbol] = live[symbol];
+      }
+    }
+    return result;
+  } catch (err) {
+    console.error("Failed to fetch live stream prices:", err.message || err);
+    return {};
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /**
  * Fetch current USD prices for a list of ticker symbols in one call.
  * Never throws — on failure, falls back to stale cache per-symbol and
@@ -48,10 +121,20 @@ async function getPrices(symbols) {
 
   const now = Date.now();
   const result = {};
-  const idsToFetch = [];
 
+  // Prefer live stream prices first — skip cache and CoinGecko entirely
+  // for anything it already has.
+  const requestedSymbols = uniqueIds.map((id) => idToSymbol[id]);
+  const livePrices = await getLiveStreamPrices(requestedSymbols);
+  for (const [symbol, price] of Object.entries(livePrices)) {
+    result[symbol] = price;
+  }
+
+  const idsToFetch = [];
   for (const id of uniqueIds) {
     const symbol = idToSymbol[id];
+    if (symbol in result) continue; // already have it live
+
     const cached = cache[id];
     if (cached && now - cached.fetchedAt < CACHE_TTL_MS) {
       result[symbol] = cached.price;
