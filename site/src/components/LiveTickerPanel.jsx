@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useLivePrices } from "../hooks/useLivePrices";
-import { COIN_SYMBOLS } from "../lib/prices";
 import Sparkline from "./Sparkline";
 
-// Full supported coin list (was hardcoded to just 4 majors before —
-// the other 10 existed for alerts but never showed on the ticker).
-// Panel is a horizontal snap-scroll carousel so all of them fit.
-const TICKER_SYMBOLS = COIN_SYMBOLS;
+// Back to the 4 majors as a fixed 2x2 grid of big cards. The 14-coin
+// carousel (basis-[22%] cards, 4 squeezed into one row) made the cards
+// too small to read on mobile — this is the full set of coins available
+// as alert assets elsewhere, but the ticker panel itself only ever
+// needs to show the majors at a readable size.
+const TICKER_SYMBOLS = ["BTC", "ETH", "SOL", "XRP"];
 
 // How many ticks to keep per symbol for the sparkline. At the 3s poll
 // interval this is a ~2 minute rolling window, long enough to show real
@@ -36,17 +37,6 @@ export default function LiveTickerPanel() {
   const prices = useLivePrices(TICKER_SYMBOLS, 3000);
   const historyRef = useRef({});
   const [, bumpVersion] = useState(0);
-  const scrollerRef = useRef(null);
-
-  function scrollByCards(direction) {
-    const el = scrollerRef.current;
-    if (!el) return;
-    // Scroll a full "page" (the width of the visible viewport) so the
-    // carousel always advances by exactly the set of cards currently on
-    // screen — 4 at a time — all the way through the 14 coins, rather
-    // than a fixed 2-card jump that drifted out of sync with what's shown.
-    el.scrollBy({ left: direction * el.clientWidth, behavior: "smooth" });
-  }
 
   useEffect(() => {
     let changed = false;
@@ -64,67 +54,42 @@ export default function LiveTickerPanel() {
   }, [prices]);
 
   return (
-    <div className="relative group">
-      <div
-        ref={scrollerRef}
-        className="flex gap-2 overflow-x-auto snap-x snap-mandatory scroll-smooth pb-1 -mx-1 px-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-      >
-        {TICKER_SYMBOLS.map((symbol) => {
-          const history = historyRef.current[symbol] || [];
-          const price = prices[symbol];
-          const openPrice = history[0];
-          const pct =
-            typeof price === "number" && openPrice
-              ? ((price - openPrice) / openPrice) * 100
-              : null;
-          const changeLabel = formatChange(pct);
-          const changeColor =
-            pct > 0 ? "text-buy" : pct < 0 ? "text-sell" : "text-fog-dim";
+    <div className="grid grid-cols-2 gap-3">
+      {TICKER_SYMBOLS.map((symbol) => {
+        const history = historyRef.current[symbol] || [];
+        const price = prices[symbol];
+        const openPrice = history[0];
+        const pct =
+          typeof price === "number" && openPrice
+            ? ((price - openPrice) / openPrice) * 100
+            : null;
+        const changeLabel = formatChange(pct);
+        const changeColor =
+          pct > 0 ? "text-buy" : pct < 0 ? "text-sell" : "text-fog-dim";
 
-          return (
-            <div
-              key={symbol}
-              data-ticker-card
-              className="snap-start shrink-0 basis-[22%] min-w-[76px] rounded-md border border-paper-border bg-paper p-2 flex flex-col gap-1"
-            >
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-[10px] font-mono text-fog-dim truncate">
-                  {symbol}
+        return (
+          <div
+            key={symbol}
+            data-ticker-card
+            className="rounded-xl border border-paper-border bg-paper p-4 flex flex-col gap-2"
+          >
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-sm font-mono text-fog-dim">{symbol}</span>
+              {changeLabel && (
+                <span className={`text-sm font-mono ${changeColor}`}>
+                  {changeLabel}
                 </span>
-                {changeLabel && (
-                  <span className={`text-[10px] font-mono ${changeColor} shrink-0`}>
-                    {changeLabel}
-                  </span>
-                )}
-              </div>
-              <span className="font-mono text-sm sm:text-base text-white font-tabular truncate">
-                {formatPrice(price)}
-              </span>
-              <div className="mt-1 w-full">
-                <Sparkline data={history} width={80} height={28} />
-              </div>
+              )}
             </div>
-          );
-        })}
-      </div>
-
-      {/* Desktop nav arrows; touch/mobile just swipes the scroller directly. */}
-      <button
-        type="button"
-        aria-label="Scroll left"
-        onClick={() => scrollByCards(-1)}
-        className="hidden sm:flex absolute -left-3 top-1/2 -translate-y-1/2 items-center justify-center w-7 h-7 rounded-full border border-paper-border bg-paper text-fog-dim opacity-0 group-hover:opacity-100 transition-opacity hover:text-white"
-      >
-        ‹
-      </button>
-      <button
-        type="button"
-        aria-label="Scroll right"
-        onClick={() => scrollByCards(1)}
-        className="hidden sm:flex absolute -right-3 top-1/2 -translate-y-1/2 items-center justify-center w-7 h-7 rounded-full border border-paper-border bg-paper text-fog-dim opacity-0 group-hover:opacity-100 transition-opacity hover:text-white"
-      >
-        ›
-      </button>
+            <span className="font-mono text-2xl sm:text-3xl text-white font-tabular truncate">
+              {formatPrice(price)}
+            </span>
+            <div className="mt-1 w-full">
+              <Sparkline data={history} width={160} height={48} />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
