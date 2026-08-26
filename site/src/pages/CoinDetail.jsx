@@ -7,11 +7,28 @@ import { computeEMASeries, getIndicatorSnapshot } from "../lib/indicators";
 import { isSupportedSymbol } from "../lib/prices";
 
 const INTERVALS = [
+  { value: "1m", label: "1M" },
+  { value: "5m", label: "5M" },
+  { value: "15m", label: "15M" },
+  { value: "30m", label: "30M" },
   { value: "1h", label: "1H" },
   { value: "4h", label: "4H" },
   { value: "1d", label: "1D" },
   { value: "1w", label: "1W" },
 ];
+
+// How many candles to request per interval — enough to show a
+// reasonable stretch of history without over-fetching. Minute-level
+// intervals need more candles just to cover a few hours/days; the
+// coarser ones are fine with fewer since each candle already spans more
+// time.
+const CANDLE_LIMIT_BY_INTERVAL = {
+  "1m": 300, // ~5 hours
+  "5m": 288, // ~24 hours
+  "15m": 288, // ~3 days
+  "30m": 240, // ~5 days
+};
+const DEFAULT_CANDLE_LIMIT = 180;
 
 function formatPrice(n) {
   if (typeof n !== "number") return "—";
@@ -40,7 +57,8 @@ export default function CoinDetail() {
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
-    fetchKlines(symbol, interval, 180).then((result) => {
+    const limit = CANDLE_LIMIT_BY_INTERVAL[interval] || DEFAULT_CANDLE_LIMIT;
+    fetchKlines(symbol, interval, limit).then((result) => {
       if (cancelled) return;
       setLoading(false);
       if (result.length === 0) {
@@ -55,12 +73,14 @@ export default function CoinDetail() {
     // candle (e.g. the hour/day actually rolled over) replaces the
     // in-progress one instead of the chart drifting from ground truth
     // forever. Live price ticks (below) handle the second-to-second
-    // movement in between syncs.
+    // movement in between syncs. Minute-level intervals resync faster
+    // since a candle closes so much sooner at that granularity.
+    const resyncMs = interval === "1m" || interval === "5m" ? 15000 : 45000;
     const resyncId = setInterval(() => {
-      fetchKlines(symbol, interval, 180).then((result) => {
+      fetchKlines(symbol, interval, limit).then((result) => {
         if (!cancelled && result.length > 0) setCandles(result);
       });
-    }, 45000);
+    }, resyncMs);
 
     return () => {
       cancelled = true;
@@ -125,38 +145,36 @@ export default function CoinDetail() {
       </header>
 
       <div className="max-w-3xl mx-auto mt-6">
-        <div className="flex items-end justify-between mb-4">
-          <div>
-            <div className="font-mono text-3xl text-white font-tabular">
-              {formatPrice(price)}
+        <div className="mb-3">
+          <div className="font-mono text-3xl text-white font-tabular">
+            {formatPrice(price)}
+          </div>
+          {changePct !== null && (
+            <div
+              className={`text-sm font-mono mt-1 ${
+                changePct > 0 ? "text-buy" : changePct < 0 ? "text-sell" : "text-fog-dim"
+              }`}
+            >
+              {changePct > 0 ? "+" : ""}
+              {changePct.toFixed(2)}% this window
             </div>
-            {changePct !== null && (
-              <div
-                className={`text-sm font-mono mt-1 ${
-                  changePct > 0 ? "text-buy" : changePct < 0 ? "text-sell" : "text-fog-dim"
-                }`}
-              >
-                {changePct > 0 ? "+" : ""}
-                {changePct.toFixed(2)}% this window
-              </div>
-            )}
-          </div>
+          )}
+        </div>
 
-          <div className="flex gap-1">
-            {INTERVALS.map((i) => (
-              <button
-                key={i.value}
-                onClick={() => setInterval_(i.value)}
-                className={`px-2.5 py-1 text-xs font-mono rounded-sm border transition-colors ${
-                  interval === i.value
-                    ? "border-buy text-white bg-buy/10"
-                    : "border-paper-border text-fog-dim hover:text-fog-bright"
-                }`}
-              >
-                {i.label}
-              </button>
-            ))}
-          </div>
+        <div className="flex gap-1 overflow-x-auto pb-1 mb-4 -mx-1 px-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+          {INTERVALS.map((i) => (
+            <button
+              key={i.value}
+              onClick={() => setInterval_(i.value)}
+              className={`shrink-0 px-2.5 py-1 text-xs font-mono rounded-sm border transition-colors ${
+                interval === i.value
+                  ? "border-buy text-white bg-buy/10"
+                  : "border-paper-border text-fog-dim hover:text-fog-bright"
+              }`}
+            >
+              {i.label}
+            </button>
+          ))}
         </div>
 
         <div className="rounded-md border border-paper-border bg-paper p-3">

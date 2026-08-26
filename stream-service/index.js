@@ -298,7 +298,7 @@ app.get("/status", (req, res) => {
   });
 });
 
-const ALLOWED_KLINE_INTERVALS = new Set(["1h", "4h", "1d", "1w"]);
+const ALLOWED_KLINE_INTERVALS = new Set(["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]);
 
 // Historical candles for the dashboard's coin detail page, fetched from
 // Binance server-side. This runs in europe-west1 specifically (see the

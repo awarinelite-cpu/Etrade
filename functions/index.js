@@ -142,7 +142,7 @@ exports.getLivePricesApi = onRequest(async (req, res) => {
 // Functions domain, which isn't blocked, fixes that. Read-only and
 // keyless, same as getLivePricesApi above.
 // ---------------------------------------------------------------------------
-const ALLOWED_KLINE_INTERVALS = new Set(["1h", "4h", "1d", "1w"]);
+const ALLOWED_KLINE_INTERVALS = new Set(["1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]);
 
 exports.getKlinesApi = onRequest(async (req, res) => {
   cors(req, res, async () => {
