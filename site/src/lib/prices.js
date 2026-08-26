@@ -1,6 +1,14 @@
 // Mirrors functions/prices.js and functions/metals.js. Kept in sync with
 // those two lists — the bot and the dashboard should always support the
-// same set of symbols. Both source APIs are free, keyless, and CORS-open.
+// same set of symbols.
+//
+// Prices themselves come from getLivePricesApi (functions/index.js), not
+// straight from CoinGecko/gold-api — that endpoint proxies to the exact
+// same getAssetPrices() the bot uses, which checks stream-service's live
+// Binance feed first. That's what makes the dashboard tick against the
+// same real-time number alerts fire on, instead of a separately-cached,
+// slower browser-side fetch.
+const FUNCTIONS_BASE = "https://us-central1-e-trading-f5bec.cloudfunctions.net";
 
 export const SYMBOL_TO_ID = {
   BTC: "bitcoin",
@@ -42,55 +50,31 @@ export function isSupportedAsset(symbol) {
   return isSupportedSymbol(symbol) || isSupportedMetal(symbol);
 }
 
-async function fetchCoinPrices(symbols) {
-  if (symbols.length === 0) return {};
-  const ids = symbols.map((s) => SYMBOL_TO_ID[s]).join(",");
-  const res = await fetch(
-    `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`
-  );
-  if (!res.ok) throw new Error(`CoinGecko request failed: ${res.status}`);
-  const data = await res.json();
-  const result = {};
-  for (const symbol of symbols) {
-    const id = SYMBOL_TO_ID[symbol];
-    if (data[id]?.usd !== undefined) result[symbol] = data[id].usd;
-  }
-  return result;
-}
-
-async function fetchMetalPrices(symbols) {
-  if (symbols.length === 0) return {};
-  const result = {};
-  await Promise.all(
-    symbols.map(async (symbol) => {
-      const assetSymbol = METAL_SYMBOL_TO_ID[symbol];
-      try {
-        const res = await fetch(`https://api.gold-api.com/price/${assetSymbol}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (typeof data.price === "number") result[symbol] = data.price;
-      } catch {
-        // best-effort — one metal failing shouldn't break the others
-      }
-    })
-  );
-  return result;
-}
-
 /**
- * Fetch current USD prices for a mixed list of symbols (coins + metals).
+ * Fetch current USD prices for a mixed list of symbols (coins + metals)
+ * via getLivePricesApi. Coins come back stream-service-live when
+ * available (same number alerts fire against); metals come from
+ * gold-api.com. Falls back to an empty result on failure so a blip
+ * doesn't crash the poll loop — the UI just keeps the last-known price.
  * @param {string[]} symbols
  * @returns {Promise<Object>} map of symbol -> price in USD
  */
 export async function getAssetPrices(symbols) {
-  const unique = [...new Set(symbols.map((s) => s.toUpperCase()))];
-  const coinSymbols = unique.filter(isSupportedSymbol);
-  const metalSymbols = unique.filter(isSupportedMetal);
+  const unique = [...new Set(symbols.map((s) => s.toUpperCase()))].filter(
+    isSupportedAsset
+  );
+  if (unique.length === 0) return {};
 
-  const [coinPrices, metalPrices] = await Promise.all([
-    fetchCoinPrices(coinSymbols),
-    fetchMetalPrices(metalSymbols),
-  ]);
-
-  return { ...coinPrices, ...metalPrices };
+  try {
+    const res = await fetch(
+      `${FUNCTIONS_BASE}/getLivePricesApi?symbols=${unique.join(",")}`
+    );
+    if (!res.ok) throw new Error(`getLivePricesApi failed: ${res.status}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "getLivePricesApi error");
+    return data.prices || {};
+  } catch (err) {
+    console.error("Failed to fetch live prices:", err);
+    return {};
+  }
 }

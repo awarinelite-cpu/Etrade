@@ -4,8 +4,14 @@ import { getAssetPrices } from "../lib/prices";
 /**
  * Polls current prices for the given symbols every `intervalMs`.
  * Symbols are deduped and re-fetched whenever the set changes.
+ *
+ * Default is 3s rather than the old 20s — getLivePricesApi is backed by
+ * stream-service's live Binance feed (falling back to a 30s CoinGecko
+ * cache only when the stream is unreachable), so polling faster than the
+ * old CoinGecko-direct setup actually surfaces new ticks instead of just
+ * re-fetching the same cached number.
  */
-export function useLivePrices(symbols, intervalMs = 20000) {
+export function useLivePrices(symbols, intervalMs = 3000) {
   const [prices, setPrices] = useState({});
   const key = [...new Set(symbols)].sort().join(",");
   const timerRef = useRef(null);

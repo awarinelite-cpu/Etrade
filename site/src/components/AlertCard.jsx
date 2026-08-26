@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ProximityBar from "./ProximityBar";
 import { updateAlert, deleteAlert } from "../lib/api";
+import LivePrice from "./LivePrice";
 
 function formatPrice(n) {
   if (typeof n !== "number") return "—";
@@ -71,9 +72,7 @@ export default function AlertCard({ alert, chatId, currentPrice, onChanged }) {
             </span>
           )}
         </div>
-        <span className="font-mono text-sm text-fog font-tabular">
-          {formatPrice(currentPrice)}
-        </span>
+        <LivePrice price={currentPrice} />
       </div>
 
       {!editing ? (

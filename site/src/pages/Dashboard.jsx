@@ -4,6 +4,7 @@ import ChatIdGate from "../components/ChatIdGate";
 import AlertCard from "../components/AlertCard";
 import CreateAlertForm from "../components/CreateAlertForm";
 import HistoryList from "../components/HistoryList";
+import PriceTicker from "../components/PriceTicker";
 import { useActiveAlerts, useAlertHistory } from "../hooks/useAlerts";
 import { useLivePrices } from "../hooks/useLivePrices";
 
@@ -116,19 +117,24 @@ export default function Dashboard() {
 
 function TopNav() {
   return (
-    <header className="max-w-3xl mx-auto pt-6 flex items-center justify-between">
-      <Link to="/" className="flex items-center gap-2 font-display font-semibold text-white">
-        <span className="h-2 w-2 rounded-full bg-buy" />
-        E-Trading
-      </Link>
-      <a
-        href="https://t.me/E_TradingSignalAlertsBot"
-        target="_blank"
-        rel="noreferrer"
-        className="text-xs font-mono text-fog hover:text-white transition-colors"
-      >
-        Open in Telegram
-      </a>
+    <header className="max-w-3xl mx-auto pt-6">
+      <div className="flex items-center justify-between">
+        <Link to="/" className="flex items-center gap-2 font-display font-semibold text-white">
+          <span className="h-2 w-2 rounded-full bg-buy" />
+          E-Trading
+        </Link>
+        <a
+          href="https://t.me/E_TradingSignalAlertsBot"
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs font-mono text-fog hover:text-white transition-colors"
+        >
+          Open in Telegram
+        </a>
+      </div>
+      <div className="mt-3 pb-3 border-b border-paper-border">
+        <PriceTicker />
+      </div>
     </header>
   );
 }

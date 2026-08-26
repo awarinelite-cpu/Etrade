@@ -99,6 +99,39 @@ exports.deleteAlertApi = onRequest(async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Live prices API — lets the dashboard show the same tick-by-tick prices
+// alerts are evaluated against, instead of a slower, separate CoinGecko
+// call straight from the browser. Browsers can't hold the identity token
+// stream-service requires, so this just proxies through getAssetPrices()
+// (coins go stream-service-first with a CoinGecko fallback, same as the
+// bot; metals go straight to gold-api.com) and hands back plain JSON.
+// Read-only and keyless, so no ownership check needed like the alert CRUD
+// endpoints above.
+// ---------------------------------------------------------------------------
+exports.getLivePricesApi = onRequest(async (req, res) => {
+  cors(req, res, async () => {
+    const raw = req.query.symbols || "";
+    const symbols = String(raw)
+      .split(",")
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean);
+
+    if (symbols.length === 0) {
+      res.status(400).json({ ok: false, error: "Provide ?symbols=BTC,ETH,..." });
+      return;
+    }
+
+    try {
+      const prices = await getAssetPrices(symbols);
+      res.status(200).json({ ok: true, prices, fetchedAt: Date.now() });
+    } catch (err) {
+      console.error("getLivePricesApi error:", err);
+      res.status(500).json({ ok: false, error: "Failed to fetch prices." });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Paystack webhook — marks a chatId as paid once a transaction succeeds.
 // Always re-verifies with Paystack server-to-server rather than trusting
 // the webhook body, and checks the signature so random POSTs to this URL
