@@ -9,6 +9,8 @@ const {
   isSupportedAsset,
   getAssetPrices,
 } = require("./assets");
+const { isSupportedSymbol } = require("./prices");
+const { getKlines } = require("./klines");
 const alertsCore = require("./alertsCore");
 const paystack = require("./paystack");
 const exchange = require("./exchange");
@@ -127,6 +129,42 @@ exports.getLivePricesApi = onRequest(async (req, res) => {
     } catch (err) {
       console.error("getLivePricesApi error:", err);
       res.status(500).json({ ok: false, error: "Failed to fetch prices." });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Historical candles API — coin detail page's chart. Proxies through
+// stream-service (europe-west1) rather than letting the browser hit
+// Binance directly: Binance's domains are outright blocked at the ISP
+// level in some countries (Nigeria since Feb 2024), so a client-side
+// fetch to api.binance.com from there just fails. Going through our own
+// Functions domain, which isn't blocked, fixes that. Read-only and
+// keyless, same as getLivePricesApi above.
+// ---------------------------------------------------------------------------
+const ALLOWED_KLINE_INTERVALS = new Set(["1h", "4h", "1d", "1w"]);
+
+exports.getKlinesApi = onRequest(async (req, res) => {
+  cors(req, res, async () => {
+    const symbol = String(req.query.symbol || "").toUpperCase();
+    const interval = String(req.query.interval || "1d");
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 180, 1), 500);
+
+    if (!isSupportedSymbol(symbol)) {
+      res.status(400).json({ ok: false, error: `Unsupported symbol: ${symbol}` });
+      return;
+    }
+    if (!ALLOWED_KLINE_INTERVALS.has(interval)) {
+      res.status(400).json({ ok: false, error: `Unsupported interval: ${interval}` });
+      return;
+    }
+
+    try {
+      const candles = await getKlines(symbol, interval, limit);
+      res.status(200).json({ ok: true, candles, fetchedAt: Date.now() });
+    } catch (err) {
+      console.error("getKlinesApi error:", err);
+      res.status(500).json({ ok: false, error: "Failed to fetch candles." });
     }
   });
 });

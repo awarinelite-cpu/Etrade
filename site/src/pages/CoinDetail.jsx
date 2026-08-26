@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import CandlestickChart from "../components/CandlestickChart";
 import { useLivePrices } from "../hooks/useLivePrices";
-import { fetchKlines, hasCandles } from "../lib/binance";
+import { fetchKlines } from "../lib/binance";
 import { computeEMASeries, getIndicatorSnapshot } from "../lib/indicators";
 import { isSupportedSymbol } from "../lib/prices";
 
@@ -32,7 +32,7 @@ export default function CoinDetail() {
   const price = prices[symbol];
 
   useEffect(() => {
-    if (!hasCandles(symbol)) {
+    if (!isSupportedSymbol(symbol)) {
       setLoading(false);
       setLoadError("Chart isn't available for this asset.");
       return;
@@ -45,7 +45,7 @@ export default function CoinDetail() {
       setLoading(false);
       if (result.length === 0) {
         setLoadError(
-          "Couldn't load chart data right now — Binance's market data may be unreachable from your network. Try again in a bit."
+          "Couldn't load chart data right now. Try again in a bit."
         );
       }
       setCandles(result);

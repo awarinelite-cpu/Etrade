@@ -192,4 +192,4 @@ function isSupportedSymbol(symbol) {
   return Boolean(SYMBOL_TO_ID[symbol.toUpperCase()]);
 }
 
-module.exports = { getPrices, isSupportedSymbol, SYMBOL_TO_ID };
+module.exports = { getPrices, isSupportedSymbol, SYMBOL_TO_ID, getIdentityToken };

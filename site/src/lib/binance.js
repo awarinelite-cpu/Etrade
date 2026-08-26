@@ -1,64 +1,38 @@
-// Historical OHLC candles for the coin detail page. Separate from
-// lib/prices.js (which only ever gives a current spot price via our own
-// getLivePricesApi) — candlesticks need real history, and Binance's
-// public klines endpoint is free, keyless, and CORS-enabled for direct
-// browser calls, so there's no need to route this through our backend.
+// Historical OHLC candles for the coin detail page.
 //
-// Mirrors stream-service/index.js's SYMBOL_TO_BINANCE (kept separate on
-// purpose: that one lists lowercase ws-stream pairs, this needs the
-// uppercase REST pair). MATIC trades as POLUSDT since Binance's Sept 2024
-// migration — bot-facing ticker stays "MATIC" so existing alerts don't
-// break.
-export const SYMBOL_TO_BINANCE_PAIR = {
-  BTC: "BTCUSDT",
-  ETH: "ETHUSDT",
-  SOL: "SOLUSDT",
-  BNB: "BNBUSDT",
-  XRP: "XRPUSDT",
-  DOGE: "DOGEUSDT",
-  ADA: "ADAUSDT",
-  MATIC: "POLUSDT",
-  DOT: "DOTUSDT",
-  LINK: "LINKUSDT",
-  LTC: "LTCUSDT",
-  AVAX: "AVAXUSDT",
-  TRX: "TRXUSDT",
-  SHIB: "SHIBUSDT",
-};
-
-export function hasCandles(symbol) {
-  return Boolean(SYMBOL_TO_BINANCE_PAIR[symbol?.toUpperCase()]);
-}
+// This does NOT call Binance directly from the browser (an earlier
+// version did). Binance's domains are outright blocked at the ISP level
+// in some countries — Nigeria's telecoms have blocked binance.com and
+// related domains since the CBN/NCC crackdown in Feb 2024 — so a
+// client-side fetch to api.binance.com just fails there, regardless of
+// CORS or rate limits. Instead this calls our own getKlinesApi Cloud
+// Function, which proxies the request through stream-service
+// (europe-west1) to Binance server-side. Mirrors lib/prices.js's
+// getAssetPrices, which solves the same class of problem for live
+// prices.
+const FUNCTIONS_BASE = "https://us-central1-e-trading-f5bec.cloudfunctions.net";
 
 /**
  * Fetch recent candles for a coin.
  * @param {string} symbol - our ticker, e.g. "BTC"
- * @param {string} interval - Binance interval string: 1h, 4h, 1d, 1w
- * @param {number} limit - number of candles (Binance max is 1000)
+ * @param {string} interval - "1h" | "4h" | "1d" | "1w"
+ * @param {number} limit - number of candles (server caps at 500)
  * @returns {Promise<Array<{time:number,open:number,high:number,low:number,close:number,volume:number}>>}
- *   Empty array on any failure (unsupported symbol, network error, geo
- *   block, etc.) — callers show an "unavailable" state rather than crash.
+ *   Empty array on any failure (unsupported symbol, network error,
+ *   backend down, etc.) — callers show an "unavailable" state rather
+ *   than crash.
  */
 export async function fetchKlines(symbol, interval = "1d", limit = 180) {
-  const pair = SYMBOL_TO_BINANCE_PAIR[symbol?.toUpperCase()];
-  if (!pair) return [];
-
   try {
     const res = await fetch(
-      `https://api.binance.com/api/v3/klines?symbol=${pair}&interval=${interval}&limit=${limit}`
+      `${FUNCTIONS_BASE}/getKlinesApi?symbol=${encodeURIComponent(
+        symbol
+      )}&interval=${encodeURIComponent(interval)}&limit=${limit}`
     );
-    if (!res.ok) {
-      throw new Error(`Binance klines request failed: ${res.status}`);
-    }
-    const raw = await res.json();
-    return raw.map((k) => ({
-      time: k[0],
-      open: parseFloat(k[1]),
-      high: parseFloat(k[2]),
-      low: parseFloat(k[3]),
-      close: parseFloat(k[4]),
-      volume: parseFloat(k[5]),
-    }));
+    if (!res.ok) throw new Error(`getKlinesApi failed: ${res.status}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "getKlinesApi error");
+    return data.candles || [];
   } catch (err) {
     console.error(`Failed to fetch ${symbol} candles:`, err.message || err);
     return [];

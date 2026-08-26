@@ -68,6 +68,12 @@ const BINANCE_TO_SYMBOL = Object.fromEntries(
   Object.entries(SYMBOL_TO_BINANCE).map(([sym, b]) => [b, sym])
 );
 
+// Same map, uppercase — Binance's REST klines endpoint wants e.g.
+// "BTCUSDT" while the ws stream wants lowercase "btcusdt".
+const SYMBOL_TO_BINANCE_REST_PAIR = Object.fromEntries(
+  Object.entries(SYMBOL_TO_BINANCE).map(([sym, b]) => [sym, b.toUpperCase()])
+);
+
 // ---------------------------------------------------------------------------
 // In-memory state — this is what makes it fast. No DB read on every tick.
 // ---------------------------------------------------------------------------
@@ -290,6 +296,53 @@ app.get("/status", (req, res) => {
     activeAlertCount: activeAlerts.length,
     lastCheckedAt,
   });
+});
+
+const ALLOWED_KLINE_INTERVALS = new Set(["1h", "4h", "1d", "1w"]);
+
+// Historical candles for the dashboard's coin detail page, fetched from
+// Binance server-side. This runs in europe-west1 specifically (see the
+// file header comment) so the Binance call itself doesn't hit the same
+// "geo-blocked cloud IP" wall a US-region function would — and more
+// importantly, it means a browser in a country that blocks Binance's
+// domains outright (e.g. Nigeria, since Feb 2024) can still get chart
+// data, because the browser only ever talks to our own Firebase
+// Functions domain, never binance.com directly.
+app.get("/klines", async (req, res) => {
+  const symbol = String(req.query.symbol || "").toUpperCase();
+  const interval = String(req.query.interval || "1d");
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 180, 1), 1000);
+
+  const pair = SYMBOL_TO_BINANCE_REST_PAIR[symbol];
+  if (!pair) {
+    res.status(400).json({ ok: false, error: `Unsupported symbol: ${symbol}` });
+    return;
+  }
+  if (!ALLOWED_KLINE_INTERVALS.has(interval)) {
+    res.status(400).json({ ok: false, error: `Unsupported interval: ${interval}` });
+    return;
+  }
+
+  try {
+    const url = `https://api.binance.com/api/v3/klines?symbol=${pair}&interval=${interval}&limit=${limit}`;
+    const binanceRes = await fetch(url);
+    if (!binanceRes.ok) {
+      throw new Error(`Binance klines request failed: ${binanceRes.status}`);
+    }
+    const raw = await binanceRes.json();
+    const candles = raw.map((k) => ({
+      time: k[0],
+      open: parseFloat(k[1]),
+      high: parseFloat(k[2]),
+      low: parseFloat(k[3]),
+      close: parseFloat(k[4]),
+      volume: parseFloat(k[5]),
+    }));
+    res.status(200).json({ ok: true, candles });
+  } catch (err) {
+    console.error(`Failed to fetch ${symbol} klines:`, err.message || err);
+    res.status(502).json({ ok: false, error: "Failed to fetch candles from Binance." });
+  }
 });
 
 const port = process.env.PORT || 8080;
