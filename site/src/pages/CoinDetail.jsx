@@ -50,10 +50,43 @@ export default function CoinDetail() {
       }
       setCandles(result);
     });
+
+    // Re-sync with real Binance candles periodically so a newly-closed
+    // candle (e.g. the hour/day actually rolled over) replaces the
+    // in-progress one instead of the chart drifting from ground truth
+    // forever. Live price ticks (below) handle the second-to-second
+    // movement in between syncs.
+    const resyncId = setInterval(() => {
+      fetchKlines(symbol, interval, 180).then((result) => {
+        if (!cancelled && result.length > 0) setCandles(result);
+      });
+    }, 45000);
+
     return () => {
       cancelled = true;
+      clearInterval(resyncId);
     };
   }, [symbol, interval]);
+
+  // Live price ticks (useLivePrices polls every 3s) update the
+  // in-progress candle's close/high/low in place — this is what makes
+  // the chart visibly move as the price moves, rather than only
+  // changing every time a full candle closes.
+  useEffect(() => {
+    if (typeof price !== "number") return;
+    setCandles((prev) => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      if (last.close === price) return prev;
+      const updated = {
+        ...last,
+        close: price,
+        high: Math.max(last.high, price),
+        low: Math.min(last.low, price),
+      };
+      return [...prev.slice(0, -1), updated];
+    });
+  }, [price]);
 
   const snapshot = candles.length ? getIndicatorSnapshot(candles) : null;
   const ema20Series = candles.length
@@ -136,9 +169,18 @@ export default function CoinDetail() {
               {loadError}
             </div>
           ) : (
-            <CandlestickChart candles={candles} emaSeries={ema20Series} />
+            <CandlestickChart
+              candles={candles}
+              emaSeries={ema20Series}
+              resetKey={`${symbol}:${interval}`}
+            />
           )}
         </div>
+        {!loading && !loadError && (
+          <p className="text-[11px] font-mono text-fog-dim mt-2">
+            Pinch or scroll to zoom, drag to pan.
+          </p>
+        )}
 
         <div className="grid grid-cols-3 gap-3 mt-4">
           <IndicatorCard
