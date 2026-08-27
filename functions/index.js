@@ -297,6 +297,7 @@ async function handleStart(chatId) {
       "*Delete an alert:*\n" +
       "`/delete <id>`\n\n" +
       "*Free plan:* up to 3 active alerts. `/upgrade` for unlimited.\n\n" +
+      "You can also alert on RSI, MACD, and percent moves, not just price — send /help for that syntax.\n\n" +
       "Send /help anytime for this message again."
   );
 }
@@ -305,9 +306,13 @@ async function handleHelp(chatId) {
   await sendMessage(
     chatId,
     "*Commands*\n\n" +
-      "`/alert <COIN> <above|below> <price> [BUY|SELL] [REPEAT]` — create a price alert\n" +
-      "  BUY/SELL is optional and just tags the alert for your own reference\n" +
-      "  REPEAT keeps the alert active — it fires again each time price re-crosses your target\n" +
+      "`/alert <COIN> <above|below> <price>` — price alert\n" +
+      "`/alert <COIN> rsi <below|above> <0-100> [interval]` — RSI alert\n" +
+      "`/alert <COIN> macd <bullish|bearish> [interval]` — MACD cross alert\n" +
+      "`/alert <COIN> move <percent> <windowMinutes>` — percent-move alert\n" +
+      "  All of the above take optional `[BUY|SELL] [REPEAT]` at the end\n" +
+      "  BUY/SELL just tags the alert for your own reference\n" +
+      "  REPEAT keeps the alert active — it fires again each time the condition is met again\n" +
       "`/price <COIN>` — check the current price before setting an alert (or `/price BTC ETH SOL` for several at once)\n" +
       "`/myalerts` — list your active alerts\n" +
       "`/myid` — get your dashboard ID (to view alerts on the web)\n" +
@@ -371,76 +376,138 @@ async function handlePrice(chatId, args) {
   await sendMessage(chatId, lines.join("\n"));
 }
 
-async function handleCreateAlert(chatId, args) {
-  if (args.length < 3 || args.length > 5) {
-    await sendMessage(
-      chatId,
-      "Usage: `/alert <COIN> <above|below> <price> [BUY|SELL] [REPEAT]`\n" +
-        "Example: `/alert BTC above 70000`\n" +
-        "Example with label: `/alert BTC below 60000 BUY`\n" +
-        "Example repeating: `/alert BTC above 70000 REPEAT`\n\n" +
-        "REPEAT alerts fire every time the price crosses your target, " +
-        "instead of just once."
-    );
-    return;
-  }
+const ALERT_USAGE =
+  "*Price:* `/alert <COIN> <above|below> <price> [BUY|SELL] [REPEAT]`\n" +
+  "e.g. `/alert BTC above 70000`\n\n" +
+  "*RSI:* `/alert <COIN> rsi <below|above> <0-100> [interval]`\n" +
+  "e.g. `/alert BTC rsi below 30 1h`\n\n" +
+  "*MACD:* `/alert <COIN> macd <bullish|bearish> [interval]`\n" +
+  "e.g. `/alert BTC macd bullish 4h`\n\n" +
+  "*Percent move:* `/alert <COIN> move <percent> <windowMinutes>`\n" +
+  "e.g. `/alert BTC move 5 60`\n\n" +
+  `Interval defaults to \`${alertsCore.DEFAULT_INDICATOR_INTERVAL}\`, one of: ${alertsCore.INDICATOR_INTERVALS.join(", ")}\n` +
+  `Window defaults to ${alertsCore.DEFAULT_WINDOW_MINUTES} min, range ${alertsCore.MIN_WINDOW_MINUTES}-${alertsCore.MAX_WINDOW_MINUTES}\n\n` +
+  "Any of the above can end with `BUY`, `SELL`, and/or `REPEAT`. " +
+  "REPEAT alerts fire every time the condition is met again, instead of just once.";
 
-  const [coinRaw, conditionRaw, priceRaw, ...rest] = args;
-  const coin = coinRaw.toUpperCase();
-  const condition = conditionRaw.toLowerCase();
-  const targetPrice = parseFloat(priceRaw);
-
-  // The remaining args (up to 2) can be BUY/SELL and/or REPEAT, in any order.
+/**
+ * Pulls BUY/SELL/REPEAT flag tokens out of the arg list, wherever they
+ * appear, leaving only the positional args each condition type parses
+ * itself. Returns { positional, label, repeat, error }.
+ */
+function extractFlags(args) {
+  const positional = [];
   let label = null;
   let repeat = false;
-  for (const token of rest) {
+  for (const token of args) {
     const normalized = token.toUpperCase();
     if (["BUY", "SELL"].includes(normalized)) {
-      if (label !== null) {
-        await sendMessage(chatId, "You can only specify one of `BUY` or `SELL`.");
-        return;
-      }
+      if (label !== null) return { error: "You can only specify one of `BUY` or `SELL`." };
       label = normalized;
     } else if (normalized === "REPEAT") {
       repeat = true;
     } else {
-      await sendMessage(
-        chatId,
-        `I didn't understand \`${token}\`. Optional flags are ` +
-          "`BUY`, `SELL`, and `REPEAT`."
-      );
-      return;
+      positional.push(token);
     }
   }
+  return { positional, label, repeat };
+}
+
+async function handleCreateAlert(chatId, args) {
+  if (args.length < 2) {
+    await sendMessage(chatId, ALERT_USAGE);
+    return;
+  }
+
+  const flagResult = extractFlags(args);
+  if (flagResult.error) {
+    await sendMessage(chatId, flagResult.error);
+    return;
+  }
+  const { positional, label, repeat } = flagResult;
+
+  const [coinRaw, keywordRaw, ...pos] = positional;
+  const coin = (coinRaw || "").toUpperCase();
+  const keyword = (keywordRaw || "").toLowerCase();
 
   if (!isSupportedAsset(coin)) {
     await sendMessage(
       chatId,
-      `I don't support *${coin}* yet. Supported: ${ALL_SUPPORTED_SYMBOLS.join(
-        ", "
-      )}`
+      `I don't support *${coin}* yet. Supported: ${ALL_SUPPORTED_SYMBOLS.join(", ")}`
     );
     return;
   }
 
-  if (!["above", "below"].includes(condition)) {
-    await sendMessage(chatId, "Condition must be either `above` or `below`.");
+  // Each branch below builds the same shape of params (condition + whatever
+  // fields that condition needs) and a human-readable summary line for the
+  // confirmation message — alertsCore.createAlert does the real validation,
+  // this just gets the right fields to it from Telegram's plain-text args.
+  let params;
+  let summary;
+
+  if (["above", "below"].includes(keyword)) {
+    const targetPrice = parseFloat(pos[0]);
+    if (isNaN(targetPrice) || targetPrice <= 0) {
+      await sendMessage(chatId, "Please provide a valid target price.\n\n" + ALERT_USAGE);
+      return;
+    }
+    params = { condition: keyword, targetPrice };
+    summary = `*${coin}* ${keyword} *$${targetPrice.toLocaleString()}*`;
+  } else if (keyword === "rsi") {
+    const direction = (pos[0] || "").toLowerCase();
+    if (!["below", "above"].includes(direction)) {
+      await sendMessage(chatId, "RSI direction must be `below` or `above`.\n\n" + ALERT_USAGE);
+      return;
+    }
+    const threshold = parseFloat(pos[1]);
+    if (isNaN(threshold) || threshold < 0 || threshold > 100) {
+      await sendMessage(chatId, "RSI threshold must be between 0 and 100.\n\n" + ALERT_USAGE);
+      return;
+    }
+    const indicatorInterval = pos[2] || alertsCore.DEFAULT_INDICATOR_INTERVAL;
+    params = { condition: `rsi_${direction}`, threshold, indicatorInterval };
+    summary = `*${coin}* RSI (${indicatorInterval}) ${direction} *${threshold}*`;
+  } else if (keyword === "macd") {
+    const direction = (pos[0] || "").toLowerCase();
+    if (!["bullish", "bearish"].includes(direction)) {
+      await sendMessage(chatId, "MACD direction must be `bullish` or `bearish`.\n\n" + ALERT_USAGE);
+      return;
+    }
+    const indicatorInterval = pos[1] || alertsCore.DEFAULT_INDICATOR_INTERVAL;
+    params = { condition: `macd_${direction}_cross`, indicatorInterval };
+    summary = `*${coin}* MACD (${indicatorInterval}) turns *${direction}*`;
+  } else if (keyword === "move") {
+    const threshold = parseFloat(pos[0]);
+    if (isNaN(threshold) || threshold <= 0) {
+      await sendMessage(chatId, "Percent move must be a positive number.\n\n" + ALERT_USAGE);
+      return;
+    }
+    const windowMinutes =
+      pos[1] !== undefined ? parseInt(pos[1], 10) : alertsCore.DEFAULT_WINDOW_MINUTES;
+    if (
+      isNaN(windowMinutes) ||
+      windowMinutes < alertsCore.MIN_WINDOW_MINUTES ||
+      windowMinutes > alertsCore.MAX_WINDOW_MINUTES
+    ) {
+      await sendMessage(
+        chatId,
+        `Window must be between ${alertsCore.MIN_WINDOW_MINUTES} and ${alertsCore.MAX_WINDOW_MINUTES} minutes.\n\n` +
+          ALERT_USAGE
+      );
+      return;
+    }
+    params = { condition: "percent_move", threshold, windowMinutes };
+    summary = `*${coin}* moves *\u00b1${threshold}%* in *${windowMinutes} min*`;
+  } else {
+    await sendMessage(
+      chatId,
+      `I didn't understand \`${keywordRaw}\`. Expected \`above\`, \`below\`, \`rsi\`, \`macd\`, or \`move\`.\n\n` +
+        ALERT_USAGE
+    );
     return;
   }
 
-  if (isNaN(targetPrice) || targetPrice <= 0) {
-    await sendMessage(chatId, "Please provide a valid target price.");
-    return;
-  }
-
-  const result = await alertsCore.createAlert({
-    chatId,
-    coin,
-    condition,
-    targetPrice,
-    label,
-    repeat,
-  });
+  const result = await alertsCore.createAlert({ chatId, coin, ...params, label, repeat });
 
   if (!result.ok) {
     await sendMessage(chatId, result.error);
@@ -456,7 +523,7 @@ async function handleCreateAlert(chatId, args) {
 
   await sendMessage(
     chatId,
-    `✅ ${labelPrefix}Alert set: *${coin}* ${condition} *$${targetPrice.toLocaleString()}*${repeatSuffix}\n` +
+    `✅ ${labelPrefix}Alert set: ${summary}${repeatSuffix}\n` +
       `ID: \`${result.id.slice(0, 6)}\`${currentPriceLine}`
   );
 }
