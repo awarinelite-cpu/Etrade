@@ -229,8 +229,9 @@ const MAX_RECONNECT_DELAY_MS = 30000;
 
 // How long to go without a single WS message (any symbol) before treating
 // the connection as dead and forcing a reconnect. Binance's combined trade
-// stream for these symbols normally ticks many times per second — 45s of
-// total silence means something's actually wrong, not just a quiet moment.
+// stream for these symbols normally ticks many times per second — 10s of
+// total silence across all 14 symbols combined means something's actually
+// wrong, not just a quiet moment.
 //
 // This exists because a WebSocket can go silently unresponsive without ever
 // firing 'close' or 'error' — the TCP connection can die at the network
@@ -242,8 +243,8 @@ const MAX_RECONNECT_DELAY_MS = 30000;
 // from here through functions/prices.js to the dashboard and alerts. This
 // watchdog is what actually detects that case instead of trusting the
 // connection object's own (silent) state.
-const STALE_CONNECTION_MS = 45000;
-const WATCHDOG_INTERVAL_MS = 15000;
+const STALE_CONNECTION_MS = 10000;
+const WATCHDOG_INTERVAL_MS = 3000;
 
 let currentWs = null;
 
