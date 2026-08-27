@@ -105,11 +105,13 @@ async function getLiveStreamPrices(symbols) {
  * Fetch current USD prices for a list of ticker symbols in one call.
  * Never throws — on failure, falls back to stale cache per-symbol and
  * simply omits symbols with no usable price (caller already treats a
- * missing symbol as "couldn't fetch").
+ * missing symbol as "couldn't fetch"). Respects the same cache as
+ * getPrices()'s CoinGecko fallback path, so calling both for the same
+ * symbol within CACHE_TTL_MS costs one real HTTP request, not two.
  * @param {string[]} symbols - e.g. ["BTC", "ETH"]
  * @returns {Promise<Object>} map of symbol -> price in USD
  */
-async function getPrices(symbols) {
+async function getCoinGeckoPrices(symbols) {
   const uniqueIds = [
     ...new Set(symbols.map((s) => SYMBOL_TO_ID[s]).filter(Boolean)),
   ];
@@ -121,20 +123,10 @@ async function getPrices(symbols) {
 
   const now = Date.now();
   const result = {};
-
-  // Prefer live stream prices first — skip cache and CoinGecko entirely
-  // for anything it already has.
-  const requestedSymbols = uniqueIds.map((id) => idToSymbol[id]);
-  const livePrices = await getLiveStreamPrices(requestedSymbols);
-  for (const [symbol, price] of Object.entries(livePrices)) {
-    result[symbol] = price;
-  }
-
   const idsToFetch = [];
+
   for (const id of uniqueIds) {
     const symbol = idToSymbol[id];
-    if (symbol in result) continue; // already have it live
-
     const cached = cache[id];
     if (cached && now - cached.fetchedAt < CACHE_TTL_MS) {
       result[symbol] = cached.price;
@@ -188,8 +180,44 @@ async function getPrices(symbols) {
   return result;
 }
 
+/**
+ * Fetch current USD prices for a list of ticker symbols in one call.
+ * Never throws — on failure, falls back to stale cache per-symbol and
+ * simply omits symbols with no usable price (caller already treats a
+ * missing symbol as "couldn't fetch").
+ * @param {string[]} symbols - e.g. ["BTC", "ETH"]
+ * @returns {Promise<Object>} map of symbol -> price in USD
+ */
+async function getPrices(symbols) {
+  const uniqueIds = [
+    ...new Set(symbols.map((s) => SYMBOL_TO_ID[s]).filter(Boolean)),
+  ];
+  if (uniqueIds.length === 0) return {};
+
+  const idToSymbol = Object.fromEntries(
+    Object.entries(SYMBOL_TO_ID).map(([sym, id]) => [id, sym])
+  );
+
+  const result = {};
+
+  // Prefer live stream prices first — skip CoinGecko entirely for
+  // anything it already has.
+  const requestedSymbols = uniqueIds.map((id) => idToSymbol[id]);
+  const livePrices = await getLiveStreamPrices(requestedSymbols);
+  for (const [symbol, price] of Object.entries(livePrices)) {
+    result[symbol] = price;
+  }
+
+  const remainingSymbols = requestedSymbols.filter((s) => !(s in result));
+  if (remainingSymbols.length > 0) {
+    Object.assign(result, await getCoinGeckoPrices(remainingSymbols));
+  }
+
+  return result;
+}
+
 function isSupportedSymbol(symbol) {
   return Boolean(SYMBOL_TO_ID[symbol.toUpperCase()]);
 }
 
-module.exports = { getPrices, isSupportedSymbol, SYMBOL_TO_ID, getIdentityToken };
+module.exports = { getPrices, getCoinGeckoPrices, isSupportedSymbol, SYMBOL_TO_ID, getIdentityToken };

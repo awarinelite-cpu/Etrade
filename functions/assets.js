@@ -1,4 +1,4 @@
-const { getPrices, isSupportedSymbol, SYMBOL_TO_ID } = require("./prices");
+const { getPrices, getCoinGeckoPrices, isSupportedSymbol, SYMBOL_TO_ID } = require("./prices");
 const {
   getMetalPrices,
   isSupportedMetal,
@@ -33,10 +33,27 @@ async function getAssetPrices(symbols) {
   return { ...coinPrices, ...metalPrices };
 }
 
+/**
+ * Fetch a second, independent price reading for cross-checking against
+ * getAssetPrices()'s primary result — used to sanity-check a price alert
+ * right before it fires, so one bad tick from the primary source (a
+ * WebSocket glitch, a stale/corrupted read) can't trigger a false alert
+ * on its own. Coins only — metals have a single source (gold-api.com),
+ * so there's nothing to cross-check them against; always returns {} for
+ * any metal symbols passed in.
+ * @param {string[]} symbols
+ * @returns {Promise<Object>} map of symbol -> price in USD (coins only)
+ */
+async function getSecondarySourcePrices(symbols) {
+  const coinSymbols = symbols.filter((s) => isSupportedSymbol(s));
+  return coinSymbols.length ? getCoinGeckoPrices(coinSymbols) : {};
+}
+
 module.exports = {
   ALL_SUPPORTED_SYMBOLS,
   isSupportedAsset,
   isSupportedSymbol,
   isSupportedMetal,
   getAssetPrices,
+  getSecondarySourcePrices,
 };

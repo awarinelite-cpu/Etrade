@@ -8,6 +8,7 @@ const {
   ALL_SUPPORTED_SYMBOLS,
   isSupportedAsset,
   getAssetPrices,
+  getSecondarySourcePrices,
 } = require("./assets");
 const { isSupportedSymbol } = require("./prices");
 const { getKlines } = require("./klines");
@@ -713,6 +714,15 @@ async function handleDeleteAlert(chatId, args) {
 // 51+ to produce the SMA50 trend leg, so 100 leaves comfortable headroom.
 const INDICATOR_CANDLE_LIMIT = 100;
 
+// How far the primary price source (live Binance stream, or CoinGecko if
+// the stream's down) is allowed to disagree with the CoinGecko cross-check
+// before a price alert is held back for a cycle instead of fired. Set
+// above normal cross-exchange/aggregation lag (CoinGecko blends multiple
+// exchanges with some delay, so 1-2% divergence during a fast move is
+// unremarkable) but well below what a genuinely broken read looks like
+// (a stale price, a decimal/unit bug, a bad tick).
+const MAX_PRICE_DEVIATION_PERCENT = 3;
+
 /**
  * Figures out whether a single alert's condition is currently true, and
  * builds the human-readable line describing why. Returns null if the data
@@ -845,11 +855,60 @@ exports.checkPrices = onSchedule(
     );
 
     const context = { prices, indicatorSnapshots, percentMoves };
+
+    // Evaluate every alert first, without firing anything yet, so the
+    // about-to-fire set is known before deciding which coins actually
+    // need a secondary-source check below.
+    const evaluated = alerts.map(({ ref, data: alert }) => ({
+      ref,
+      alert,
+      evaluation: evaluateAlert(alert, context),
+    }));
+
+    // Cross-check price alerts (only PRICE_CONDITIONS — RSI/MACD/percent-move
+    // all derive from the same klines source there's no independent second
+    // reading for) against CoinGecko right before they'd actually fire.
+    // Deliberately scoped to "about to notify" rather than every check
+    // cycle: CoinGecko's free tier is already aggressively rate-limited
+    // (see prices.js), and this is the moment a bad primary-source read
+    // would actually cost something — a false alert — not every minute.
+    const aboutToFireCoins = [
+      ...new Set(
+        evaluated
+          .filter(({ alert, evaluation }) => evaluation?.met && PRICE_CONDITIONS.includes(alert.condition))
+          .map(({ alert }) => alert.coin)
+      ),
+    ];
+    const secondaryPrices = aboutToFireCoins.length
+      ? await getSecondarySourcePrices(aboutToFireCoins)
+      : {};
+
     const triggeredUpdates = [];
 
-    for (const { ref, data: alert } of alerts) {
-      const evaluation = evaluateAlert(alert, context);
+    for (const { ref, alert, evaluation } of evaluated) {
       if (!evaluation) continue; // data unavailable this cycle — skip, don't guess
+
+      if (evaluation.met && PRICE_CONDITIONS.includes(alert.condition)) {
+        const secondaryPrice = secondaryPrices[alert.coin];
+        if (typeof secondaryPrice === "number") {
+          const deviationPercent =
+            (Math.abs(evaluation.currentValue - secondaryPrice) / secondaryPrice) * 100;
+          if (deviationPercent > MAX_PRICE_DEVIATION_PERCENT) {
+            // Primary and secondary sources disagree too much to trust —
+            // skip firing this cycle without touching armed/active state,
+            // so a confirmed crossing next cycle still fires normally.
+            console.warn(
+              `Skipping alert ${ref.id} (${alert.coin}) — price sources disagree by ` +
+                `${deviationPercent.toFixed(2)}% (primary $${evaluation.currentValue}, ` +
+                `secondary $${secondaryPrice}), above the ${MAX_PRICE_DEVIATION_PERCENT}% threshold.`
+            );
+            continue;
+          }
+        }
+        // Secondary source unavailable (CoinGecko down/rate-limited) is not
+        // treated as a reason to block — requiring both sources every time
+        // would make the feature less reliable than having one, not more.
+      }
 
       if (!alert.repeat) {
         // One-shot alert: fire once, then deactivate.
