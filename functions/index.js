@@ -538,6 +538,32 @@ function labelTag(label) {
   return "";
 }
 
+const RSI_CONDITIONS_DISPLAY = ["rsi_below", "rsi_above"];
+const MACD_CONDITIONS_DISPLAY = ["macd_bullish_cross", "macd_bearish_cross"];
+
+// Same per-condition-type description logic as evaluateAlert's message
+// text and the web dashboard's AlertCard.jsx — three separate places that
+// all need to agree on how to describe an alert, since none of them share
+// a module (functions/ vs site/src/, plus this one needs to stay terse for
+// a Telegram message rather than JSX).
+function describeAlertLine(d) {
+  if (d.condition === "above" || d.condition === "below") {
+    return `${d.coin} ${d.condition} $${d.targetPrice.toLocaleString()}`;
+  }
+  if (RSI_CONDITIONS_DISPLAY.includes(d.condition)) {
+    const direction = d.condition === "rsi_below" ? "below" : "above";
+    return `${d.coin} RSI (${d.indicatorInterval}) ${direction} ${d.threshold}`;
+  }
+  if (MACD_CONDITIONS_DISPLAY.includes(d.condition)) {
+    const direction = d.condition === "macd_bullish_cross" ? "bullish" : "bearish";
+    return `${d.coin} MACD (${d.indicatorInterval}) turns ${direction}`;
+  }
+  if (d.condition === "percent_move") {
+    return `${d.coin} moves ±${d.threshold}% in ${d.windowMinutes}m`;
+  }
+  return `${d.coin} ${d.condition}`;
+}
+
 async function handleListAlerts(chatId) {
   const snapshot = await db
     .collection("alerts")
@@ -558,7 +584,7 @@ async function handleListAlerts(chatId) {
     const tag = labelTag(d.label).trim();
     const tagPrefix = tag ? `${tag} ` : "";
     const repeatSuffix = d.repeat ? " 🔁" : "";
-    return `\`${doc.id.slice(0, 6)}\` — ${tagPrefix}${d.coin} ${d.condition} $${d.targetPrice.toLocaleString()}${repeatSuffix}`;
+    return `\`${doc.id.slice(0, 6)}\` — ${tagPrefix}${describeAlertLine(d)}${repeatSuffix}`;
   });
 
   await sendMessage(chatId, "*Your active alerts:*\n\n" + lines.join("\n"));
