@@ -56,7 +56,13 @@ export default function LiveTickerPanel() {
       const price = prices[symbol];
       if (typeof price !== "number") continue;
       const existing = historyRef.current[symbol] || [];
-      if (existing[existing.length - 1] === price) continue;
+      // Always plot a point on every poll, even if the price is identical
+      // to the last tick — a flat stretch is real market data too, and the
+      // line advancing every 3s is itself the signal that polling is
+      // actually happening. Skipping unchanged ticks previously meant a
+      // genuinely frozen feed (see: the stream-service dead-connection bug)
+      // looked identical to a merely quiet market — no visual difference
+      // between "nothing is moving" and "nothing is arriving".
       historyRef.current[symbol] = [...existing, price].slice(
         -MAX_HISTORY_POINTS
       );
