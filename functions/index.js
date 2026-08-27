@@ -11,7 +11,9 @@ const {
 } = require("./assets");
 const { isSupportedSymbol } = require("./prices");
 const { getKlines } = require("./klines");
+const { getIndicatorSnapshot } = require("./indicators");
 const alertsCore = require("./alertsCore");
+const { PRICE_CONDITIONS, RSI_CONDITIONS, MACD_CONDITIONS } = alertsCore;
 const paystack = require("./paystack");
 const exchange = require("./exchange");
 const crypto = require("crypto");
@@ -614,6 +616,82 @@ async function handleDeleteAlert(chatId, args) {
   await sendMessage(chatId, "🗑️ Alert deleted.");
 }
 
+// Number of candles fetched for an RSI/MACD read — indicators.js needs
+// 51+ to produce the SMA50 trend leg, so 100 leaves comfortable headroom.
+const INDICATOR_CANDLE_LIMIT = 100;
+
+/**
+ * Figures out whether a single alert's condition is currently true, and
+ * builds the human-readable line describing why. Returns null if the data
+ * needed to evaluate it isn't available this cycle (e.g. a klines fetch
+ * failed) — the caller skips the alert entirely for this check rather than
+ * treating "unknown" as "not met", so a transient fetch failure can't
+ * silently re-arm or fire anything.
+ */
+function evaluateAlert(alert, { prices, indicatorSnapshots, percentMoves }) {
+  if (PRICE_CONDITIONS.includes(alert.condition)) {
+    const currentPrice = prices[alert.coin];
+    if (currentPrice === undefined) return null;
+    const met =
+      (alert.condition === "above" && currentPrice >= alert.targetPrice) ||
+      (alert.condition === "below" && currentPrice <= alert.targetPrice);
+    return {
+      met,
+      currentValue: currentPrice,
+      message:
+        `${alert.coin} is now $${currentPrice.toLocaleString()}, which is ${alert.condition} ` +
+        `your target of $${alert.targetPrice.toLocaleString()}.`,
+    };
+  }
+
+  if (RSI_CONDITIONS.includes(alert.condition)) {
+    const snap = indicatorSnapshots.get(`${alert.coin}:${alert.indicatorInterval}`);
+    if (!snap) return null;
+    const met =
+      (alert.condition === "rsi_below" && snap.rsi <= alert.threshold) ||
+      (alert.condition === "rsi_above" && snap.rsi >= alert.threshold);
+    const direction = alert.condition === "rsi_below" ? "at or below" : "at or above";
+    return {
+      met,
+      currentValue: snap.rsi,
+      message:
+        `${alert.coin}'s RSI (${alert.indicatorInterval}) is now ${snap.rsi.toFixed(1)}, ` +
+        `which is ${direction} your threshold of ${alert.threshold}.`,
+    };
+  }
+
+  if (MACD_CONDITIONS.includes(alert.condition)) {
+    const snap = indicatorSnapshots.get(`${alert.coin}:${alert.indicatorInterval}`);
+    if (!snap) return null;
+    const bullish = snap.macd > snap.signal;
+    const met =
+      (alert.condition === "macd_bullish_cross" && bullish) ||
+      (alert.condition === "macd_bearish_cross" && !bullish);
+    return {
+      met,
+      currentValue: snap.histogram,
+      message:
+        `${alert.coin}'s MACD (${alert.indicatorInterval}) just turned ${bullish ? "bullish" : "bearish"} ` +
+        `— MACD ${snap.macd.toFixed(4)} vs. signal ${snap.signal.toFixed(4)}.`,
+    };
+  }
+
+  if (alert.condition === "percent_move") {
+    const move = percentMoves.get(`${alert.coin}:${alert.windowMinutes}`);
+    if (move === undefined) return null;
+    const met = Math.abs(move) >= alert.threshold;
+    return {
+      met,
+      currentValue: move,
+      message:
+        `${alert.coin} has moved ${move >= 0 ? "+" : ""}${move.toFixed(2)}% in the last ` +
+        `${alert.windowMinutes} minutes, past your ${alert.threshold}% threshold.`,
+    };
+  }
+
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Scheduled price checker — runs every 1 minute
 // ---------------------------------------------------------------------------
@@ -630,40 +708,72 @@ exports.checkPrices = onSchedule(
       return;
     }
 
-    const coins = [...new Set(snapshot.docs.map((doc) => doc.data().coin))];
-    const prices = await getAssetPrices(coins);
+    const alerts = snapshot.docs.map((doc) => ({ ref: doc.ref, data: doc.data() }));
 
+    // Price alerts: one batched price fetch, same as before.
+    const priceCoins = [
+      ...new Set(alerts.filter((a) => PRICE_CONDITIONS.includes(a.data.condition)).map((a) => a.data.coin)),
+    ];
+    const prices = priceCoins.length ? await getAssetPrices(priceCoins) : {};
+
+    // RSI/MACD alerts: batch by unique (coin, interval) pair so five alerts
+    // on BTC/1h only cost one klines fetch, not five.
+    const indicatorAlerts = alerts.filter(
+      (a) => RSI_CONDITIONS.includes(a.data.condition) || MACD_CONDITIONS.includes(a.data.condition)
+    );
+    const indicatorPairs = [...new Set(indicatorAlerts.map((a) => `${a.data.coin}:${a.data.indicatorInterval}`))];
+    const indicatorSnapshots = new Map();
+    await Promise.all(
+      indicatorPairs.map(async (key) => {
+        const [coin, interval] = key.split(":");
+        const candles = await getKlines(coin, interval, INDICATOR_CANDLE_LIMIT);
+        const snap = getIndicatorSnapshot(candles);
+        if (snap) indicatorSnapshots.set(key, snap);
+      })
+    );
+
+    // Percent-move alerts: batch by unique (coin, windowMinutes) pair.
+    // Always reads 1m candles regardless of window length — comparing the
+    // oldest close in a `windowMinutes`-sized slice of 1m candles to the
+    // newest gives the % move over exactly that window.
+    const percentAlerts = alerts.filter((a) => a.data.condition === "percent_move");
+    const percentPairs = [...new Set(percentAlerts.map((a) => `${a.data.coin}:${a.data.windowMinutes}`))];
+    const percentMoves = new Map();
+    await Promise.all(
+      percentPairs.map(async (key) => {
+        const [coin, windowStr] = key.split(":");
+        const window = Number(windowStr);
+        const candles = await getKlines(coin, "1m", window + 1);
+        if (candles.length < 2) return;
+        const first = candles[0].close;
+        const last = candles[candles.length - 1].close;
+        if (first > 0) percentMoves.set(key, ((last - first) / first) * 100);
+      })
+    );
+
+    const context = { prices, indicatorSnapshots, percentMoves };
     const triggeredUpdates = [];
 
-    for (const doc of snapshot.docs) {
-      const alert = doc.data();
-      const currentPrice = prices[alert.coin];
-      if (currentPrice === undefined) continue;
-
-      const conditionMet =
-        (alert.condition === "above" && currentPrice >= alert.targetPrice) ||
-        (alert.condition === "below" && currentPrice <= alert.targetPrice);
+    for (const { ref, data: alert } of alerts) {
+      const evaluation = evaluateAlert(alert, context);
+      if (!evaluation) continue; // data unavailable this cycle — skip, don't guess
 
       if (!alert.repeat) {
         // One-shot alert: fire once, then deactivate.
-        if (conditionMet) {
-          triggeredUpdates.push(
-            notifyAndDeactivate(doc.ref, alert, currentPrice)
-          );
+        if (evaluation.met) {
+          triggeredUpdates.push(notifyAndDeactivate(ref, alert, evaluation));
         }
         continue;
       }
 
       // Repeating alert: only fire while "armed" (i.e. hasn't already
-      // notified for this crossing), then re-arm once price moves back
-      // to the other side of the target so the next crossing can fire too.
+      // notified for this crossing), then re-arm once the condition is no
+      // longer true so the next crossing can fire too.
       const armed = alert.armed !== false; // default true for older docs
-      if (armed && conditionMet) {
-        triggeredUpdates.push(
-          notifyAndReArmLater(doc.ref, alert, currentPrice)
-        );
-      } else if (!armed && !conditionMet) {
-        triggeredUpdates.push(doc.ref.update({ armed: true }));
+      if (armed && evaluation.met) {
+        triggeredUpdates.push(notifyAndReArmLater(ref, alert, evaluation));
+      } else if (!armed && !evaluation.met) {
+        triggeredUpdates.push(ref.update({ armed: true }));
       }
     }
 
@@ -674,58 +784,59 @@ exports.checkPrices = onSchedule(
   }
 );
 
-async function notifyAndDeactivate(docRef, alert, currentPrice) {
+async function notifyAndDeactivate(docRef, alert, evaluation) {
   const labelPrefix = labelTag(alert.label);
 
   await sendMessage(
     alert.chatId,
     `🚨 *${labelPrefix}${alert.coin} Alert!*\n\n` +
-      `${alert.coin} is now $${currentPrice.toLocaleString()}, which is ${alert.condition} ` +
-      `your target of $${alert.targetPrice.toLocaleString()}.\n\n` +
+      `${evaluation.message}\n\n` +
       "This alert has been deactivated. Create a new one anytime with `/alert`."
   );
 
   await docRef.update({
     active: false,
     lastTriggeredAt: admin.firestore.FieldValue.serverTimestamp(),
-    triggeredAtPrice: currentPrice,
+    triggeredAtValue: evaluation.currentValue,
   });
 
-  await logAlertHistory(alert, currentPrice);
+  await logAlertHistory(alert, evaluation.currentValue);
 }
 
-async function notifyAndReArmLater(docRef, alert, currentPrice) {
+async function notifyAndReArmLater(docRef, alert, evaluation) {
   const labelPrefix = labelTag(alert.label);
 
   await sendMessage(
     alert.chatId,
     `🚨 *${labelPrefix}${alert.coin} Alert!* 🔁\n\n` +
-      `${alert.coin} is now $${currentPrice.toLocaleString()}, which is ${alert.condition} ` +
-      `your target of $${alert.targetPrice.toLocaleString()}.\n\n` +
-      "This is a repeating alert — it'll fire again next time price crosses " +
-      "your target. Delete it anytime with `/delete`."
+      `${evaluation.message}\n\n` +
+      "This is a repeating alert — it'll fire again next time the condition is met. " +
+      "Delete it anytime with `/delete`."
   );
 
-  // Mark disarmed so it doesn't re-fire on every check while price stays
-  // past the target. It re-arms automatically once price crosses back.
+  // Mark disarmed so it doesn't re-fire on every check while the condition
+  // stays true. It re-arms automatically once the condition is no longer met.
   await docRef.update({
     armed: false,
     lastTriggeredAt: admin.firestore.FieldValue.serverTimestamp(),
-    triggeredAtPrice: currentPrice,
+    triggeredAtValue: evaluation.currentValue,
   });
 
-  await logAlertHistory(alert, currentPrice);
+  await logAlertHistory(alert, evaluation.currentValue);
 }
 
-async function logAlertHistory(alert, currentPrice) {
+async function logAlertHistory(alert, currentValue) {
   await db.collection("alert_history").add({
     chatId: alert.chatId,
     coin: alert.coin,
     condition: alert.condition,
-    targetPrice: alert.targetPrice,
+    targetPrice: alert.targetPrice ?? null,
+    threshold: alert.threshold ?? null,
+    indicatorInterval: alert.indicatorInterval ?? null,
+    windowMinutes: alert.windowMinutes ?? null,
     label: alert.label || null,
     repeat: Boolean(alert.repeat),
-    triggeredAtPrice: currentPrice,
+    triggeredAtValue: currentValue,
     triggeredAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 }

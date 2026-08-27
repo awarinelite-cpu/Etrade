@@ -3,8 +3,99 @@ const { getAssetPrices, isSupportedAsset, ALL_SUPPORTED_SYMBOLS } = require("./a
 
 const FREE_TIER_ALERT_LIMIT = 3;
 
+// Price alerts compare directly against a target price (unchanged).
+// RSI/MACD alerts read off a candle series at some timeframe. Percent-move
+// alerts compare price now vs. price N minutes ago. All three share the
+// same armed/repeat/one-shot firing mechanics in checkPrices — only how
+// "is this condition currently true" gets computed differs per category.
+const PRICE_CONDITIONS = ["above", "below"];
+const RSI_CONDITIONS = ["rsi_below", "rsi_above"];
+const MACD_CONDITIONS = ["macd_bullish_cross", "macd_bearish_cross"];
+const ALL_CONDITIONS = [...PRICE_CONDITIONS, ...RSI_CONDITIONS, ...MACD_CONDITIONS, "percent_move"];
+
+// Timeframe options for RSI/MACD alerts — deliberately a small subset of
+// what the coin-detail chart offers, since very short timeframes (1m/5m)
+// produce noisy indicator crosses that aren't useful as alert triggers.
+const INDICATOR_INTERVALS = ["15m", "1h", "4h", "1d"];
+const DEFAULT_INDICATOR_INTERVAL = "1h";
+
+const MIN_WINDOW_MINUTES = 5;
+const MAX_WINDOW_MINUTES = 1440; // 24h — longer than that, just use a price alert instead.
+const DEFAULT_WINDOW_MINUTES = 60;
+
 function db() {
   return admin.firestore();
+}
+
+/**
+ * Validates and normalizes the condition-specific fields for a create/update
+ * call. Returns { ok: true, fields } with only the fields relevant to this
+ * condition populated (others explicitly null so stale values from an
+ * earlier condition type don't linger on update), or { ok: false, error }.
+ */
+function validateConditionFields(condition, { targetPrice, threshold, indicatorInterval, windowMinutes }) {
+  if (PRICE_CONDITIONS.includes(condition)) {
+    const price = Number(targetPrice);
+    if (isNaN(price) || price <= 0) {
+      return { ok: false, error: "Target price must be a positive number." };
+    }
+    return {
+      ok: true,
+      fields: { targetPrice: price, threshold: null, indicatorInterval: null, windowMinutes: null },
+    };
+  }
+
+  if (RSI_CONDITIONS.includes(condition)) {
+    const rsiThreshold = Number(threshold);
+    if (isNaN(rsiThreshold) || rsiThreshold < 0 || rsiThreshold > 100) {
+      return { ok: false, error: "RSI threshold must be between 0 and 100." };
+    }
+    const interval = indicatorInterval || DEFAULT_INDICATOR_INTERVAL;
+    if (!INDICATOR_INTERVALS.includes(interval)) {
+      return {
+        ok: false,
+        error: `Timeframe must be one of: ${INDICATOR_INTERVALS.join(", ")}.`,
+      };
+    }
+    return {
+      ok: true,
+      fields: { targetPrice: null, threshold: rsiThreshold, indicatorInterval: interval, windowMinutes: null },
+    };
+  }
+
+  if (MACD_CONDITIONS.includes(condition)) {
+    const interval = indicatorInterval || DEFAULT_INDICATOR_INTERVAL;
+    if (!INDICATOR_INTERVALS.includes(interval)) {
+      return {
+        ok: false,
+        error: `Timeframe must be one of: ${INDICATOR_INTERVALS.join(", ")}.`,
+      };
+    }
+    return {
+      ok: true,
+      fields: { targetPrice: null, threshold: null, indicatorInterval: interval, windowMinutes: null },
+    };
+  }
+
+  if (condition === "percent_move") {
+    const percentThreshold = Number(threshold);
+    if (isNaN(percentThreshold) || percentThreshold <= 0) {
+      return { ok: false, error: "Percent move must be a positive number." };
+    }
+    const window = windowMinutes === undefined ? DEFAULT_WINDOW_MINUTES : Number(windowMinutes);
+    if (isNaN(window) || window < MIN_WINDOW_MINUTES || window > MAX_WINDOW_MINUTES) {
+      return {
+        ok: false,
+        error: `Window must be between ${MIN_WINDOW_MINUTES} and ${MAX_WINDOW_MINUTES} minutes.`,
+      };
+    }
+    return {
+      ok: true,
+      fields: { targetPrice: null, threshold: percentThreshold, indicatorInterval: null, windowMinutes: window },
+    };
+  }
+
+  return { ok: false, error: `Unknown condition "${condition}".` };
 }
 
 async function isPaidUser(chatId) {
@@ -18,10 +109,19 @@ async function isPaidUser(chatId) {
  * limits, supported assets, and stored shape.
  * @returns {Promise<{ok: true, id: string, currentPrice?: number} | {ok: false, error: string}>}
  */
-async function createAlert({ chatId, coin, condition, targetPrice, label, repeat }) {
+async function createAlert({
+  chatId,
+  coin,
+  condition,
+  targetPrice,
+  threshold,
+  indicatorInterval,
+  windowMinutes,
+  label,
+  repeat,
+}) {
   coin = String(coin || "").toUpperCase();
   condition = String(condition || "").toLowerCase();
-  targetPrice = Number(targetPrice);
   label = label ? String(label).toUpperCase() : null;
   repeat = Boolean(repeat);
 
@@ -31,12 +131,16 @@ async function createAlert({ chatId, coin, condition, targetPrice, label, repeat
       error: `Unsupported asset "${coin}". Supported: ${ALL_SUPPORTED_SYMBOLS.join(", ")}`,
     };
   }
-  if (!["above", "below"].includes(condition)) {
-    return { ok: false, error: 'Condition must be "above" or "below".' };
+  if (!ALL_CONDITIONS.includes(condition)) {
+    return { ok: false, error: `Condition must be one of: ${ALL_CONDITIONS.join(", ")}.` };
   }
-  if (isNaN(targetPrice) || targetPrice <= 0) {
-    return { ok: false, error: "Target price must be a positive number." };
-  }
+  const validated = validateConditionFields(condition, {
+    targetPrice,
+    threshold,
+    indicatorInterval,
+    windowMinutes,
+  });
+  if (!validated.ok) return validated;
   if (label && !["BUY", "SELL"].includes(label)) {
     return { ok: false, error: 'Label must be "BUY" or "SELL" if provided.' };
   }
@@ -61,7 +165,7 @@ async function createAlert({ chatId, coin, condition, targetPrice, label, repeat
       chatId: String(chatId),
       coin,
       condition,
-      targetPrice,
+      ...validated.fields,
       label,
       repeat,
       armed: true,
@@ -87,31 +191,52 @@ async function createAlert({ chatId, coin, condition, targetPrice, label, repeat
  * the same "unlisted-link" privacy model the rest of the app already uses
  * (see firestore.rules), not real authentication.
  */
-async function updateAlert({ id, chatId, condition, targetPrice, label, repeat }) {
+async function updateAlert({
+  id,
+  chatId,
+  condition,
+  targetPrice,
+  threshold,
+  indicatorInterval,
+  windowMinutes,
+  label,
+  repeat,
+}) {
   const ref = db().collection("alerts").doc(id);
   const doc = await ref.get();
 
   if (!doc.exists) return { ok: false, error: "Alert not found." };
-  if (doc.data().chatId !== String(chatId)) {
+  const existing = doc.data();
+  if (existing.chatId !== String(chatId)) {
     return { ok: false, error: "This alert doesn't belong to that chat ID." };
   }
 
   const updates = {};
 
-  if (condition !== undefined) {
-    condition = String(condition).toLowerCase();
-    if (!["above", "below"].includes(condition)) {
-      return { ok: false, error: 'Condition must be "above" or "below".' };
-    }
-    updates.condition = condition;
-  }
+  // Changing the condition — or any of a condition's own fields — always
+  // re-validates against whichever condition is now in effect (the new
+  // one if provided, otherwise the alert's existing one), since a
+  // targetPrice edit means nothing for an RSI alert and vice versa.
+  const conditionFieldsTouched =
+    targetPrice !== undefined ||
+    threshold !== undefined ||
+    indicatorInterval !== undefined ||
+    windowMinutes !== undefined;
 
-  if (targetPrice !== undefined) {
-    targetPrice = Number(targetPrice);
-    if (isNaN(targetPrice) || targetPrice <= 0) {
-      return { ok: false, error: "Target price must be a positive number." };
+  if (condition !== undefined || conditionFieldsTouched) {
+    const effectiveCondition = condition !== undefined ? String(condition).toLowerCase() : existing.condition;
+    if (!ALL_CONDITIONS.includes(effectiveCondition)) {
+      return { ok: false, error: `Condition must be one of: ${ALL_CONDITIONS.join(", ")}.` };
     }
-    updates.targetPrice = targetPrice;
+    const validated = validateConditionFields(effectiveCondition, {
+      targetPrice: targetPrice !== undefined ? targetPrice : existing.targetPrice,
+      threshold: threshold !== undefined ? threshold : existing.threshold,
+      indicatorInterval: indicatorInterval !== undefined ? indicatorInterval : existing.indicatorInterval,
+      windowMinutes: windowMinutes !== undefined ? windowMinutes : existing.windowMinutes,
+    });
+    if (!validated.ok) return validated;
+    updates.condition = effectiveCondition;
+    Object.assign(updates, validated.fields);
   }
 
   if (label !== undefined) {
@@ -152,6 +277,15 @@ async function deleteAlert({ id, chatId }) {
 
 module.exports = {
   FREE_TIER_ALERT_LIMIT,
+  PRICE_CONDITIONS,
+  RSI_CONDITIONS,
+  MACD_CONDITIONS,
+  ALL_CONDITIONS,
+  INDICATOR_INTERVALS,
+  DEFAULT_INDICATOR_INTERVAL,
+  MIN_WINDOW_MINUTES,
+  MAX_WINDOW_MINUTES,
+  DEFAULT_WINDOW_MINUTES,
   createAlert,
   updateAlert,
   deleteAlert,
