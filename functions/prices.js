@@ -67,6 +67,14 @@ async function getIdentityToken(audience) {
  * Best-effort fetch of live prices from stream-service. Never throws —
  * returns {} on any failure (service down, not configured, timed out,
  * symbol not yet streamed) so callers can just fall through to CoinGecko.
+ *
+ * Also treats a self-reported stale connection (data.isStale — see
+ * stream-service's watchdog) the same as a failure: if the WebSocket feed
+ * has gone dark, /status still responds 200 OK with whatever the last real
+ * tick was, so trusting it here would mean silently serving a frozen price
+ * as if it were live. Falling through to CoinGecko in that case is strictly
+ * better even though CoinGecko is slower to update — a stale-but-labeled
+ * price beats a stale-but-trusted one.
  */
 async function getLiveStreamPrices(symbols) {
   if (!STREAM_SERVICE_URL) return {};
@@ -84,6 +92,15 @@ async function getLiveStreamPrices(symbols) {
       throw new Error(`stream-service /status failed: ${res.status}`);
     }
     const data = await res.json();
+
+    if (data.isStale) {
+      console.warn(
+        `stream-service reports its own feed as stale (${Math.round((data.staleForMs || 0) / 1000)}s since last tick) — ` +
+          "falling through to CoinGecko instead of trusting it."
+      );
+      return {};
+    }
+
     const live = data.latestPrice || {};
 
     const result = {};

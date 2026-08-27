@@ -80,6 +80,7 @@ const SYMBOL_TO_BINANCE_REST_PAIR = Object.fromEntries(
 const latestPrice = {}; // symbol -> number
 let activeAlerts = []; // array of { id, ref, ...alertData }, kept fresh by a Firestore realtime listener
 const lastCheckedAt = {}; // symbol -> ms timestamp, for throttling
+let lastMessageAt = 0; // ms timestamp of the most recent WS message, any symbol — staleness watchdog
 
 // Don't re-evaluate a coin's alerts more than once per this interval, even
 // if Binance sends dozens of trade ticks per second. 1s matches "does it
@@ -226,6 +227,26 @@ async function checkAlertsForSymbol(symbol, currentPrice) {
 let reconnectDelayMs = 1000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 
+// How long to go without a single WS message (any symbol) before treating
+// the connection as dead and forcing a reconnect. Binance's combined trade
+// stream for these symbols normally ticks many times per second — 45s of
+// total silence means something's actually wrong, not just a quiet moment.
+//
+// This exists because a WebSocket can go silently unresponsive without ever
+// firing 'close' or 'error' — the TCP connection can die at the network
+// layer (a NAT/load-balancer timeout, a routing blip) with no FIN/RST ever
+// reaching this process. When that happens, the existing reconnect logic
+// (which only runs on 'close'/'error') never triggers, latestPrice freezes
+// at whatever the last real tick was, and /status keeps reporting 200 OK
+// with that frozen number forever — no error anywhere in the whole chain
+// from here through functions/prices.js to the dashboard and alerts. This
+// watchdog is what actually detects that case instead of trusting the
+// connection object's own (silent) state.
+const STALE_CONNECTION_MS = 45000;
+const WATCHDOG_INTERVAL_MS = 15000;
+
+let currentWs = null;
+
 function connectBinanceStream() {
   const streams = Object.values(SYMBOL_TO_BINANCE)
     .map((b) => `${b}@trade`)
@@ -234,13 +255,16 @@ function connectBinanceStream() {
 
   console.log("Connecting to Binance stream...");
   const ws = new WebSocket(url);
+  currentWs = ws;
 
   ws.on("open", () => {
     console.log("Binance stream connected.");
     reconnectDelayMs = 1000; // reset backoff on a healthy connection
+    lastMessageAt = Date.now(); // count the open itself so the watchdog doesn't fire immediately
   });
 
   ws.on("message", (raw) => {
+    lastMessageAt = Date.now();
     let msg;
     try {
       msg = JSON.parse(raw);
@@ -282,6 +306,24 @@ function connectBinanceStream() {
   });
 }
 
+// Runs independently of the WS's own event handlers, since those are
+// exactly what fails to fire in the dead-connection case this guards
+// against. ws.terminate() forces the socket closed from this end even if
+// the remote side never sends a proper close frame — that in turn fires
+// this connection's 'close' handler above, which reconnects normally.
+setInterval(() => {
+  if (!lastMessageAt) return; // haven't connected yet at all — nothing to judge staleness against
+  const staleFor = Date.now() - lastMessageAt;
+  if (staleFor > STALE_CONNECTION_MS) {
+    console.warn(
+      `No Binance stream messages in ${Math.round(staleFor / 1000)}s — ` +
+        "connection appears dead. Forcing reconnect."
+    );
+    if (currentWs) currentWs.terminate();
+    else connectBinanceStream();
+  }
+}, WATCHDOG_INTERVAL_MS);
+
 // ---------------------------------------------------------------------------
 // HTTP server — Cloud Run requires listening on PORT, and this doubles as
 // a health/status check you can hit to confirm the stream is alive.
@@ -291,10 +333,14 @@ const app = express();
 app.get("/health", (req, res) => res.status(200).send("ok"));
 
 app.get("/status", (req, res) => {
+  const staleForMs = lastMessageAt ? Date.now() - lastMessageAt : null;
   res.status(200).json({
     latestPrice,
     activeAlertCount: activeAlerts.length,
     lastCheckedAt,
+    lastMessageAt: lastMessageAt || null,
+    staleForMs,
+    isStale: staleForMs !== null && staleForMs > STALE_CONNECTION_MS,
   });
 });
 
